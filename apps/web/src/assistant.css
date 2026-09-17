@@ -1,0 +1,42 @@
+.oa-assistant { width: 100%; min-width: 0; }
+.oa-assistant .chat-body { min-height: 300px; max-height: 56vh; }
+.oa-assistant .chat-message { margin-bottom: 12px; }
+.oa-assistant .assistant-heading .icon-button:first-of-type { margin-left: auto; }
+.oa-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; }
+.oa-shortcuts button, .oa-upload { border: 1px solid #dbe7df; background: #f3f8f5; padding: 6px 10px; border-radius: 8px; color: #275b42; font-size: 12px; }
+.oa-data-card { margin: 14px 0; padding: 15px; border: 1px solid #dce7e0; border-radius: 12px; background: white; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.oa-data-card h3 { margin: 0 0 9px; font-size: 14px; }
+.oa-data-card p { line-height: 1.7; }
+.oa-data-card small { color: #77837c; }
+.oa-record { display: flex; flex-direction: column; width: 100%; gap: 5px; text-align: left; color: var(--ink); border: 0; border-bottom: 1px solid var(--line); background: white; padding: 13px 0; font-size: 12px; overflow-wrap: anywhere; }
+button.oa-record:hover { background: #f1f8f3; }
+.oa-action { border-left: 3px solid #287b55; }
+.oa-action-hint { color: #547362; font-size: 12px; }
+.oa-confirmation, .oa-clarification { padding: 15px 18px; border-top: 1px solid #cde1d3; background: #f0f8f2; }
+.oa-confirmation strong { display: flex; align-items: center; gap: 6px; color: #1e5b3d; font-size: 13px; }
+.oa-confirmation p, .oa-clarification p { margin: 7px 0 12px; font-size: 12px; line-height: 1.6; color: #536b5d; }
+.oa-confirmation .preview-actions { flex-wrap: wrap; }
+.oa-clarification .oa-shortcuts { padding: 0 0 10px; }
+.oa-clarification small, .oa-preview-editor small { color: #64776b; font-size: 11px; }
+.oa-preview-editor { margin-top: 15px; }
+.oa-editor-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.oa-action dl > div { display: grid; grid-template-columns: 105px minmax(0,1fr); gap: 12px; padding: 6px 0; }
+.oa-action dt { color: var(--muted); }.oa-action dd { margin: 0; white-space: pre-wrap; }
+.oa-context { background: #f0f7f2; border-top: 1px solid #dce7e0; padding: 13px 16px; display: flex; flex-direction: column; gap: 7px; font-size: 12px; max-height: 230px; overflow: auto; overflow-wrap: anywhere; }
+.oa-context .oa-shortcuts { padding: 0; }
+.oa-upload { display: inline-flex; gap: 4px; align-items: center; position: relative; overflow: hidden; cursor: pointer; }
+.oa-upload input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.oa-cancellation { background: white; border: 1px solid #dce7e0; border-radius: 7px; padding: 7px; text-align: left; color: #275b42; }
+.oa-secret { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
+.oa-secret input, .oa-operation-form input, .oa-operation-form select { width: 100%; min-width: 0; border: 1px solid #dce4df; border-radius: 7px; padding: 8px; }
+.oa-form-toggle { padding: 7px 16px 12px; display: flex; gap: 12px; align-items: center; font-size: 11px; color: var(--muted); }
+.oa-form-toggle button { border: 0; background: transparent; color: var(--green); font-weight: 600; padding: 0; }
+.oa-operation-form { padding: 16px; margin: 0 16px 15px; background: #f7faf8; border: 1px solid #dce4df; border-radius: 10px; display: grid; gap: 12px; }
+.oa-operation-form label { display: grid; gap: 6px; font-size: 12px; }
+.oa-operation-form input[type="checkbox"] { width: auto; margin-right: 6px; }
+.oa-operation-form fieldset { min-width: 0; display: grid; gap: 10px; border: 1px solid #dce4df; border-radius: 8px; }
+.oa-assistant button:disabled { cursor: not-allowed; opacity: .5; }
+.assistant-launch { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 14px; padding: 30px; background: #eef7f0; border: 1px solid #d4e6d8; border-radius: 14px; }
+.assistant-launch h2 { margin: 0; }.assistant-launch p { color: #5c7365; line-height: 1.8; margin: 0; }
+@media (max-width: 600px) { .oa-assistant .chat-body { padding: 12px; max-height: 52vh; }.oa-action dl > div { grid-template-columns: 75px minmax(0,1fr); }.oa-assistant .chat-message { max-width: 100%; }.oa-data-card { padding: 12px; }.oa-operation-form { margin: 0 10px 12px; padding: 10px; } }
+@media (max-width: 600px) { .oa-confirmation, .oa-clarification { padding: 12px; }.oa-confirmation .button { flex: 1 0 auto; }.oa-editor-dates { grid-template-columns: minmax(0, 1fr); } }

@@ -1,0 +1,38 @@
+.auth-page { min-height: 100dvh; padding: 36px 24px 48px; background: #f7f9f8; display: flex; flex-direction: column; align-items: center; color: #172e28; }
+.auth-brand { display: flex; align-items: center; gap: 12px; align-self: flex-start; }
+.auth-mark { width: 44px; height: 44px; background: #155b45; color: white; border-radius: 8px; display: grid; place-items: center; }
+.auth-brand strong, .auth-brand span:not(.auth-mark) { display: block; }
+.auth-brand strong { font-size: 21px; }
+.auth-brand div > span { color: #61716a; font-size: 12px; margin-top: 3px; }
+.auth-content { width: min(100%, 390px); margin: auto 0; padding: 48px 0; }
+.auth-content h1 { margin: 0 0 10px; font-size: 28px; line-height: 1.4; }
+.auth-subtitle { margin: 0 0 30px; color: #61716a; overflow-wrap: anywhere; }
+.auth-content fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.auth-username { display: flex; flex-direction: column; gap: 8px; font-size: 14px; font-weight: 500; }
+.auth-username input, .password-control input { box-sizing: border-box; min-width: 0; width: 100%; height: 44px; border: 1px solid #cdd9d3; border-radius: 6px; padding: 0 12px; background: white; color: #172e28; font-size: 15px; }
+.auth-username input:focus, .password-control:focus-within { outline: 2px solid #72ad94; outline-offset: 2px; }
+.password-field { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.password-field > label { font-size: 14px; font-weight: 500; }
+.password-control { display: flex; align-items: center; border: 1px solid #cdd9d3; border-radius: 6px; background: white; min-width: 0; padding-right: 4px; gap: 2px; }
+.password-control input { flex: 1; border: 0; background: transparent; height: 42px; }
+.password-control input:focus { outline: none; box-shadow: none; }
+.password-control .icon-button { flex: 0 0 32px; width: 32px; height: 32px; border: 0; }
+.password-policy, .auth-support { color: #66756f; font-size: 12px; line-height: 1.7; margin: 0; }
+.auth-support { margin-top: 26px; text-align: center; }
+.auth-notice { margin: -12px 0 24px; padding: 10px 12px; border-left: 3px solid #b98329; background: #fff5df; font-size: 13px; line-height: 1.7; }
+.auth-error { min-height: 20px; font-size: 13px; color: #b03535; line-height: 1.6; overflow-wrap: anywhere; }
+.auth-submit { width: 100%; justify-content: center; min-height: 44px; }
+.signed-in-user { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.account-receipt, .account-password-form { padding: 22px 28px; display: grid; gap: 18px; }
+.account-receipt p, .account-password-form p { margin: 0; color: #61716a; line-height: 1.7; font-size: 13px; overflow-wrap: anywhere; }
+.account-receipt dl { margin: 0; display: grid; gap: 10px; }
+.account-receipt dl div { display: flex; gap: 18px; }
+.account-receipt dt { color: #61716a; flex: 0 0 50px; }
+.account-receipt dd { margin: 0; overflow-wrap: anywhere; }
+.account-password-actions { padding: 0 28px 20px; }
+@media (max-width: 600px) {
+  .auth-page { padding: 24px 22px; }
+  .auth-content { padding: 34px 0; }
+  .signed-in-user { max-width: 115px; }
+  .account-receipt, .account-password-form { padding: 18px; }
+}

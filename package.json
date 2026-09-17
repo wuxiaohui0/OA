@@ -1,0 +1,23 @@
+{
+  "name": "smart-oa-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "node scripts/api.mjs dev",
+    "start:api": "node scripts/api.mjs start",
+    "dev:web": "npm run dev -w @smart-oa/web",
+    "build": "node scripts/api.mjs build && npm run build -w @smart-oa/web",
+    "test": "node scripts/api.mjs test",
+    "check": "node scripts/api.mjs check && npm run check -w @smart-oa/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
