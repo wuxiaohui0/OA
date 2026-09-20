@@ -164,8 +164,10 @@ def test_bootstrap_only_once_and_existing_data_preserved(tmp_path, password_hash
         assert client.get("/api/auth/session", headers={"Cookie": f"{COOKIE_NAME}={token}"}).status_code == 200
 
 
-def test_assistant_tools_use_authenticated_session(client):
+def test_unconfigured_assistant_uses_session_and_fails_closed(client):
     login(client, "u1001")
     response = client.post("/api/agent/leave/draft", json={"message": "9月17号请一天病假，头疼"})
-    assert response.status_code == 201, response.text
-    assert response.json()["leave"]["applicantId"] == "u1001"
+    assert response.status_code == 200, response.text
+    assert response.json()["execution"]["mode"] == "agent-unavailable"
+    assert response.json()["status"] == "no_action"
+    assert not client.app.state.db.list_leaves("u1001")["mine"]

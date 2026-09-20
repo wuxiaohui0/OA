@@ -54,7 +54,7 @@ def create_model():
         model=settings["model"],
         temperature=0,
         max_retries=2,
-        timeout=30,
+        timeout=None,
         use_responses_api=False,
         base_url=settings["baseUrl"],
         default_headers=settings["defaultHeaders"],
@@ -62,17 +62,33 @@ def create_model():
 
 
 def timeout_seconds():
+    raw = os.getenv("AGENT_TIMEOUT_MS", "0").strip()
+    if raw in ("", "0"):
+        return None
     try:
-        value = float(os.getenv("AGENT_TIMEOUT_MS", "45000"))
-        return max(2, min(value / 1000, 90)) if math.isfinite(value) else 45
+        value = float(raw)
+        return max(5, value / 1000) if math.isfinite(value) and value > 0 else None
     except ValueError:
-        return 45
+        return None
 
 
 @tool
 async def get_leave_policy() -> str:
     """读取当前企业请假制度、审批流程和审批人规则。回答制度咨询及审核申请前必须调用。"""
     return WORKFLOW
+
+
+@tool
+async def get_current_datetime() -> dict:
+    """读取当前上海日期、星期和时间。仅用于日期、星期、当前时间等问题，不读取 OA 工作日历。"""
+    current = datetime.now(SHANGHAI)
+    return {
+        "timezone": "Asia/Shanghai",
+        "iso": current.isoformat(),
+        "date": current.date().isoformat(),
+        "time": current.strftime("%H:%M:%S"),
+        "weekday": "星期" + "一二三四五六日"[current.weekday()],
+    }
 
 
 def build_agent(name, tools, schema, prompt):
@@ -88,7 +104,9 @@ def build_agent(name, tools, schema, prompt):
 
 
 async def invoke(agent, messages):
-    return await asyncio.wait_for(agent.ainvoke({"messages": messages}, {"recursion_limit": 60}), timeout_seconds())
+    request = agent.ainvoke({"messages": messages}, {"recursion_limit": 60})
+    timeout = timeout_seconds()
+    return await asyncio.wait_for(request, timeout) if timeout is not None else await request
 
 
 def last_match(pattern, value):
@@ -196,7 +214,7 @@ def deterministic_extract(message, now=None):
         "handoverUser": handover[1].strip() if handover else None,
         "handoverNotes": None,
         "missingFields": missing,
-        "mode": "deterministic-fallback",
+        "mode": "deterministic-parser",
     }
 
 
@@ -252,53 +270,23 @@ def parse_response(result):
         raise AssistantResponseError() from None
     if response["status"] in ("draft_created", "approval_completed", "rejection_completed"):
         raise AssistantResponseError()
+    parts = re.findall(r"[^。！？!?]+[。！？!?]?\s*", response["message"])
+    compact = []
+    for part in parts:
+        sentence = part.strip()
+        if sentence and (not compact or sentence != compact[-1]):
+            compact.append(sentence)
+    response["message"] = "".join(compact)
     return response
 
 
 async def run_assistant(message, user, api, history=None):
     history = history or []
     if not model_settings()["enabled"]:
-        mode = "deterministic-fallback"
-        if (
-            re.search(r"请假|年假|事假|病假|审批", message)
-            and re.search(r"流程|制度|规则|政策|条件|怎么|如何|审批人|谁.*批", message)
-            and not re.search(
-                r"(帮我|替我|给我|请你|并|然后|顺便).*(创建|提交|批准|通过|驳回)|(?:批准|通过|驳回|拒绝).*(全部|所有)",
-                message,
-            )
-        ):
-            return result_payload("no_action", WORKFLOW, mode)
-        if re.search(r"审批|批准|通过|驳回|拒绝", message):
-            return result_payload("no_action", "试点期间 AI 只提供辅助建议，请到“我的审批”查看申请并人工确认。", mode)
-        if re.fullmatch(r"(谢谢|好的|好|收到)[！!。\s]*", message):
-            return result_payload("no_action", "收到。", mode)
-        completed_index = next(
-            (i for i in range(len(history) - 1, -1, -1) if history[i].get("outcome") == "completed"), -1
-        )
-        extraction = deterministic_extract(
-            "\n".join(
-                [turn["content"] for turn in history[completed_index + 1 :] if turn["role"] == "user"] + [message]
-            )
-        )
-        if extraction["missingFields"]:
-            return result_payload(
-                "needs_information",
-                "还需要补充：" + "、".join(extraction["missingFields"]) + "。",
-                mode,
-                extraction=extraction,
-                missingFields=extraction["missingFields"],
-            )
-        data = {k: extraction[k] for k in ("leaveType", "startAt", "endAt", "reason", "handoverUser", "handoverNotes")}
-        leave = await api.create_draft(data)
         return result_payload(
-            "draft_created",
-            draft_summary(leave),
-            mode,
-            leave=leave,
-            extraction=extraction,
-            tool_name="create_leave_draft",
-            endpoint="POST /api/leave-requests",
-            calls=[{"tool": "create_leave_draft", "endpoint": "POST /api/leave-requests", "requestId": leave["id"]}],
+            "no_action",
+            "OA 智能体模型尚未配置，本轮没有执行查询或业务操作。请联系管理员配置模型。",
+            "agent-unavailable",
         )
 
     created, creating, tool_input, listed = None, None, None, None
@@ -426,7 +414,7 @@ def deterministic_review(leave, sufficient, overlap):
         "riskFlags": risks,
         "policyReferences": ["系统试点规则第2-4条"],
         "confidence": 0.88 if risks else 0.96,
-        "mode": "deterministic-fallback",
+        "mode": "policy-engine",
     }
 
 

@@ -19,6 +19,22 @@ class ConversationStore:
                 conversation["id"], conversation["userId"],
                 json.dumps({**conversation, "busy": False}, ensure_ascii=False), self.now())
 
+    def create(self, user_id):
+        require(len(self.items) < 1000, "当前对话较多，请稍后重试。", 503)
+        conversation = {
+            "id": str(uuid4()),
+            "userId": user_id,
+            "messages": [],
+            "draftId": None,
+            "touchedAt": self.now(),
+            "busy": False,
+            "runStatus": "idle",
+            "contextId": None,
+        }
+        self.items[conversation["id"]] = conversation
+        self.save(conversation)
+        return conversation
+
     def get(self, user_id, conversation_id):
         conversation = self.items.get(conversation_id)
         if not conversation and self.db:
@@ -44,18 +60,7 @@ class ConversationStore:
         if conversation_id:
             conversation = self.get(user_id, conversation_id)
         else:
-            require(len(self.items) < 1000, "当前对话较多，请稍后重试。", 503)
-            conversation = {
-                "id": str(uuid4()),
-                "userId": user_id,
-                "messages": [],
-                "draftId": None,
-                "touchedAt": self.now(),
-                "busy": False,
-                "contextId": None,
-            }
-            self.items[conversation["id"]] = conversation
-            self.save(conversation)
+            conversation = self.create(user_id)
         require(not conversation["busy"], "上一条消息仍在处理中，请稍候。", 409)
         if rotate and len(conversation["messages"]) >= 60:
             conversation["messages"] = conversation["messages"][-40:]
@@ -77,6 +82,7 @@ class ConversationStore:
             "messages": conversation["messages"],
             "draft": draft,
             "busy": conversation["busy"],
+            "runStatus": conversation.get("runStatus", "idle"),
         }
 
     @staticmethod

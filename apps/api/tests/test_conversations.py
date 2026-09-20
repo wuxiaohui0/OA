@@ -36,3 +36,11 @@ def test_message_and_store_limits():
         store.begin("bob")
     with pytest.raises(BusinessError, match="对话较多"):
         store.begin("bob")
+
+
+def test_empty_workspace_can_be_created_before_first_message():
+    store = ConversationStore()
+    item = store.create("alice")
+    assert item["busy"] is False
+    assert item["runStatus"] == "idle"
+    assert store.get("alice", item["id"])["messages"] == []

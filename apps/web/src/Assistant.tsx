@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Bot, Check, LoaderCircle, MessageSquarePlus, Paperclip, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { Bot, Check, LoaderCircle, MessageSquarePlus, Paperclip, Pause, Plus, Send, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api, API_BASE, ApiError, leaveTypeLabels, statusLabels, type AssistantAction, type ChatWorkspace, type ChatCard, type ChatCatalog, type ChatSchema, type User } from "./api";
 import "./assistant.css";
 
@@ -34,7 +34,7 @@ function DataCard({ card, send, disabled }: { card: ChatCard; send: (text: strin
   </section>;
 }
 
-const optionNames: Record<string, string> = { annual: "年假", personal: "事假", sick: "病假", active: "启用", inactive: "停用" };
+const optionNames: Record<string, string> = { annual: "年假", personal: "事假", sick: "病假", active: "启用", inactive: "停用", economy: "经济舱", high_speed: "高铁二等座", business: "商务舱", none: "无需住宿", standard: "标准住宿", premium: "高级住宿", comp_leave: "调休", pay: "加班费", CNY: "人民币", USD: "美元", EUR: "欧元" };
 const permissionNames: Record<string, string> = { manageOrganization: "管理组织人员", manageAccounts: "管理管理员账号", leadTeam: "担任团队负责人", approveLeave: "审批请假" };
 
 function resolve(schema: ChatSchema, root: ChatSchema): ChatSchema {
@@ -81,10 +81,45 @@ function OperationForm({ catalog, workspace, busy, prepare }: {
 
   function field(key: string, raw: ChatSchema, required: boolean, path = key) {
     const schema = resolve(raw, operation.schema);
-    const label = catalog.labels[key] || permissionNames[key] || optionNames[key] || key;
+    const label = operation.labels?.[key] || catalog.labels[key] || permissionNames[key] || optionNames[key] || key;
     if (schema.type === "object") return <fieldset key={path}><legend>{label}</legend>{Object.entries(schema.properties || {}).map(([k, v]) => field(k, v, (schema.required || []).includes(k), path + "." + k))}</fieldset>;
     const fallback = raw.default !== undefined ? raw.default : schema.default;
     const value = values[path] !== undefined ? values[path] : isEdit ? "" : fallback === undefined ? "" : fallback;
+    if (schema.type === "array") {
+      const itemSchema = resolve(schema.items || {}, operation.schema);
+      if (key === "travelerIds") {
+        const selected = Array.isArray(value) ? value as string[] : [];
+        return <fieldset key={path}><legend>{label}</legend><small>可选，不选择表示没有同行人。</small>
+          {catalog.directory.employees.filter(u => u.status === "active").map(u => <label key={u.id}>
+            <span><input type="checkbox" checked={selected.includes(u.id)} onChange={e => setValue(path, e.target.checked ? [...selected, u.id] : selected.filter(id => id !== u.id))} />{u.name} · {u.employeeNo}</span>
+          </label>)}
+        </fieldset>;
+      }
+      const rows: Record<string, unknown>[] = Array.isArray(value) ? value : Array.from({ length: schema.minItems || 0 }, () => ({}));
+      const itemProperties = itemSchema.properties || {};
+      const itemLabel = (itemKey: string) => catalog.labels[itemKey] || itemKey;
+      const updateRows = (next: Record<string, unknown>[]) => setValue(path, next);
+      return <fieldset key={path} className="oa-array-field"><legend>{label}{required ? " *" : ""}</legend>
+        {rows.map((row, index) => <div className="oa-array-row" key={index}>
+          {Object.entries(itemProperties).map(([itemKey, itemRaw]) => {
+            const item = resolve(itemRaw, operation.schema);
+            const itemValue = row[itemKey] ?? item.default ?? "";
+            const itemRequired = (itemSchema.required || []).includes(itemKey);
+            const inputType = item.type === "number" ? "number" : "text";
+            return <label key={itemKey}><span>{itemLabel(itemKey)}{itemRequired ? " *" : ""}</span>
+              <input required={itemRequired} type={inputType} min={item.minimum} max={item.maximum}
+                step={item.type === "number" ? "0.01" : undefined} value={String(itemValue)}
+                onChange={e => updateRows(rows.map((entry, rowIndex) => rowIndex === index ? {
+                  ...entry, [itemKey]: item.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value,
+                } : entry))} />
+            </label>;
+          })}
+          <button className="icon-button" type="button" title="删除明细" aria-label={`删除第 ${index + 1} 条明细`} disabled={rows.length === 1}
+            onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={15} /></button>
+        </div>)}
+        <button className="button ghost" type="button" disabled={schema.maxItems !== undefined && rows.length >= schema.maxItems} onClick={() => updateRows([...rows, {}])}><Plus size={15} />添加明细</button>
+      </fieldset>;
+    }
     const nullable = raw.anyOf?.some(s => s.type === "null");
     let options: { value: string; label: string }[] | null = null;
     if (schema.const !== undefined) options = [{ value: String(schema.const), label: optionNames[String(schema.const)] || String(schema.const) }];
@@ -92,14 +127,14 @@ function OperationForm({ catalog, workspace, busy, prepare }: {
     else if (["approverId", "userId", "managerId", "leaveApproverId", "leaderId"].includes(key)) options = catalog.directory.employees.filter(u => u.status === "active").map(u => ({ value: u.id, label: u.name + " · " + u.employeeNo }));
     else if (["departmentId", "parentId"].includes(key)) options = catalog.directory.departments.map(d => ({ value: d.id, label: d.name }));
     else if (key === "role") options = catalog.directory.roles.map(r => ({ value: r.id, label: r.name }));
-    else if (key === "title") options = catalog.directory.positions.map(p => ({ value: p.name, label: p.name }));
+    else if (key === "title" && ["onboard_employee", "update_employee"].includes(op)) options = catalog.directory.positions.map(p => ({ value: p.name, label: p.name }));
     else if (schema.type === "boolean") options = [{ value: "true", label: "是" }, { value: "false", label: "否" }];
     const display = value === null && options ? "__null__" : String(value ?? "");
     return <label key={path}><span>{label}{required ? " *" : ""}</span>{options ?
       <select aria-label={label} required={required} value={display} onChange={e => setValue(path, e.target.value === "" ? "" : e.target.value === "__null__" ? null : schema.type === "boolean" ? e.target.value === "true" : e.target.value)}>
         <option value="">{isEdit ? "保持不变" : "请选择"}</option>{nullable && <option value="__null__">不设置</option>}{options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select> :
-      <input aria-label={label} required={required && value !== null} disabled={value === null} type={key === "startAt" || key === "endAt" ? "datetime-local" : key === "day" || key === "hiredAt" ? "date" : schema.type === "number" ? "number" : "text"}
+      <input aria-label={label} required={required && value !== null} disabled={value === null} type={key === "startAt" || key === "endAt" ? "datetime-local" : ["day", "hiredAt", "date", "needBy"].includes(key) ? "date" : schema.type === "number" ? "number" : "text"}
         step={schema.type === "number" ? "0.01" : undefined} min={schema.minimum} max={schema.maximum}
         value={display} placeholder={isEdit ? "留空保持不变" : ""} onChange={e => setValue(path, schema.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)} />}
       {nullable && !options && <span><input aria-label={"不设置" + label} type="checkbox" checked={value === null} onChange={e => setValue(path, e.target.checked ? null : "")} />不设置{label}</span>}
@@ -152,8 +187,10 @@ export default function Assistant({ user, contextId, onContextUsed, onChanged }:
   const [workspace, setWorkspace] = useState<ChatWorkspace | null>(null);
   const [catalog, setCatalog] = useState<ChatCatalog | null>(null);
   const [message, setMessage] = useState("");
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(true);
+  const [pausing, setPausing] = useState(false);
   const [password, setPassword] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -199,7 +236,7 @@ export default function Assistant({ user, contextId, onContextUsed, onChanged }:
     void run(async () => (await api.agentMessage(userId, "选择申请:" + contextId, workspace?.id)).conversation)
       .finally(() => { selectingContext.current = false; onContextUsed(); });
   }, [contextId, busy]);
-  useEffect(() => { if (chatBody.current) chatBody.current.scrollTop = chatBody.current.scrollHeight; }, [workspace, busy, error]);
+  useEffect(() => { if (chatBody.current) chatBody.current.scrollTop = chatBody.current.scrollHeight; }, [workspace, busy, error, pendingMessage]);
   async function run(action: () => Promise<ChatWorkspace>) {
     if (busy) return;
     setBusy(true); setError("");
@@ -217,10 +254,39 @@ export default function Assistant({ user, contextId, onContextUsed, onChanged }:
     } finally { if (live.current) setBusy(false); }
   }
   async function send(text: string) {
-    if (!text.trim()) return;
+    const content = text.trim();
+    if (!content) return;
     if (editingId) { setError("请先更新确认卡片或放弃修改，再继续对话。"); return; }
-    const result = await run(async () => (await api.agentMessage(userId, text.trim(), workspace?.id, undefined, workspace?.action?.id)).conversation);
-    if (result) setMessage("");
+    setPendingMessage(content);
+    setMessage("");
+    try {
+      await run(async () => {
+        let currentWorkspace = workspace;
+        if (!currentWorkspace) {
+          currentWorkspace = await api.createChatWorkspace(userId);
+          show(currentWorkspace);
+        }
+        const result = (await api.agentMessage(userId, content, currentWorkspace.id, undefined, currentWorkspace.action?.id)).conversation;
+        if (live.current) setPendingMessage(null);
+        return result;
+      });
+    } finally {
+      if (live.current) setPendingMessage(null);
+    }
+  }
+  async function pauseRun() {
+    if (!workspace || !busy || pausing) return;
+    setPausing(true); setError("");
+    try {
+      const result = await api.pauseAgentRun(userId, workspace.id);
+      show(result);
+      if (!result.busy) setPendingMessage(null);
+      setBusy(result.busy);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "暂停失败，请稍后重试");
+    } finally {
+      if (live.current) setPausing(false);
+    }
   }
   const current = workspace?.context;
   const ownRequest = current?.leave.applicantId === userId;
@@ -238,34 +304,37 @@ export default function Assistant({ user, contextId, onContextUsed, onChanged }:
   const confirmLabels: Record<string, string> = {
     apply_leave: "确认请假并提交",
     create_leave: "确认创建草稿", edit_leave: "确认修改", submit: "确认提交审批",
+    create_travel: "确认创建出差草稿", submit_travel: "确认提交出差申请", withdraw_travel: "确认撤回出差申请",
+    create_procurement: "确认创建采购草稿", submit_procurement: "确认提交采购申请", withdraw_procurement: "确认撤回采购申请",
+    create_overtime: "确认创建加班草稿", submit_overtime: "确认提交加班申请", withdraw_overtime: "确认撤回加班申请",
+    create_comp_time: "确认创建调休草稿", submit_comp_time: "确认提交调休申请", withdraw_comp_time: "确认撤回调休申请",
     approve: "确认批准", reject: "确认驳回", request_information: "确认退回补充",
     withdraw: "确认撤回", delete_leave: "确认删除", cancel_leave: "确认申请销假",
     approve_cancellation: "确认批准销假", reject_cancellation: "确认驳回销假",
   };
   const actionStatus: Record<string, string> = { pending: "待确认", executing: "执行中", succeeded: "已完成", failed: "执行失败", cancelled: "已取消" };
+  const agent = workspace?.agent || catalog?.agent;
   return <section className="assistant-card oa-assistant">
-    <div className="assistant-heading"><div className="bot-mark"><Sparkles size={19} /></div><div><h2>智能 OA 助手</h2><p>{user.name} · {user.roleName} · 按你的权限办理业务</p></div>
+    <div className="assistant-heading"><div className="bot-mark"><Sparkles size={19} /></div><div><h2>{agent?.name || "智能 OA 助手"}</h2><p>{agent ? `${agent.mission} · ${agent.skills.map(skill => skill.name).join(" / ")}` : `${user.name} · ${user.roleName} · 按你的权限办理业务`}</p></div>
       <button className="icon-button" aria-label="刷新对话" disabled={busy || !workspace} onClick={() => void run(() => api.chatWorkspace(userId, workspace!.id))}>↻</button>
       <button className="icon-button" title={action?.status === "pending" ? "请先确认或取消当前操作" : "新对话"} aria-label="新对话" disabled={busy || action?.status === "pending"} onClick={() => { localStorage.removeItem(storageKey); setWorkspace(null); setMessage(""); setError(""); setPassword(""); }}><MessageSquarePlus size={18} /></button>
     </div>
-    <div className="oa-shortcuts">{["我的申请", ...(user.permissions.approveLeave ? ["待我审批"] : []), "我的余额", "工作日历", "消息通知", "通讯录"].map(t => <button disabled={busy} key={t} onClick={() => void send(t)}>{t}</button>)}</div>
     <div className="chat-body" ref={chatBody} role="log" aria-label="助手对话" aria-live="polite">
-      {!workspace?.messages.length && <div className="chat-message agent-message"><div className="chat-avatar"><Bot size={16} /></div><div>你好，可以说“明天下午请事假，原因：家中有事”，或先查询申请再继续办理。需要补充材料时，可以直接上传。</div></div>}
       {workspace?.messages.map((m, i) => <div className={"chat-message " + (m.role === "user" ? "user-message" : "agent-message")} key={i}>{m.role === "assistant" && <div className="chat-avatar"><Bot size={16} /></div>}<div>{m.content}</div></div>)}
+      {pendingMessage && <div className="chat-message user-message optimistic-message"><div>{pendingMessage}</div></div>}
       {workspace?.cards.map((card, i) => <DataCard key={i} card={card} send={text => void send(text)} disabled={busy} />)}
-      {action && <section className="oa-data-card oa-action"><div className="draft-title"><strong>{action.preview.title}</strong><span>{actionStatus[action.status]}</span></div>
+      {action && (action.status === "pending" || action.status === "executing") && <section className="oa-data-card oa-action"><div className="draft-title"><strong>{action.preview.title}</strong><span>{actionStatus[action.status]}</span></div>
         <dl>{action.preview.fields.map((f, i) => <div key={i}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}</dl>
         {action.status === "pending" && <><p>{action.preview.note}</p>
           {action.requiresPassword && <label className="oa-secret">初始密码<input aria-label="初始密码" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} /><small>至少 12 位，通过专用字段提交，不进入对话或模型。</small></label>}
           <p className="oa-action-hint">核对以上信息后，使用对话下方的确认按钮。</p>
         </>}
-        {action.result && <p role="status">{action.result.message}</p>}
       </section>}
-      {busy && <div className="chat-message agent-message"><div className="chat-avatar"><LoaderCircle className="spin" size={16} /></div><div>正在处理，请稍候…</div></div>}
+      {busy && pendingMessage && <div className="chat-message agent-message thinking-message"><div className="chat-avatar"><LoaderCircle className="spin" size={16} /></div><div><span /><span /><span /></div></div>}
       {error && <div className="chat-error" role="alert">{error}</div>}
     </div>
     {workspace?.clarification && !pending && <section className="oa-clarification" aria-label="待补充信息">
-      <strong>请补充信息</strong><p>{workspace.clarification.missingFields.join("、") || workspace.clarification.message}</p>
+      <strong>请补充信息</strong><p>{workspace.clarification.missingFields.map(field => catalog?.labels[field] || field).join("、") || workspace.clarification.message}</p>
       <div className="oa-shortcuts">{workspace.clarification.choices.map(choice => <button key={choice} disabled={busy} onClick={() => void send(choice)}>{choice}</button>)}
         {!workspace.clarification.choices.length && <button disabled={busy} onClick={() => messageInput.current?.focus()}>补充信息</button>}</div>
       <small>补齐后会生成确认卡片，当前尚未执行业务变更。</small>
@@ -295,11 +364,11 @@ export default function Assistant({ user, contextId, onContextUsed, onChanged }:
       {current.attachments.map(a => <a key={a.id} href={API_BASE + "/api/attachments/" + encodeURIComponent(a.id)}>{a.filename}</a>)}
       {current.cancellations.map(c => <button className="oa-cancellation" disabled={busy} key={c.id} onClick={() => void send("选择销假:" + c.id)}>销假 {c.hours} 小时 · {({ pending: "待审批", approved: "已批准", rejected: "已驳回", withdrawn: "已撤回" })[c.status]} · {c.reason}</button>)}
     </section>}
-    <form className="chat-input" onSubmit={e => { e.preventDefault(); void send(message); }}><input ref={messageInput} aria-label="消息" maxLength={4000} value={message} disabled={busy || editing} onChange={e => setMessage(e.target.value)} placeholder={user.permissions.approveLeave ? "例如：原因改为家中有事 / 批准这条 / 确认执行" : "例如：明天下午请事假，原因：家中有事"} /><button aria-label="发送" disabled={busy || editing || !message.trim()}><Send size={18} /></button></form>
+    <form className="chat-input" onSubmit={e => { e.preventDefault(); if (!busy) void send(message); }}><input ref={messageInput} aria-label="消息" maxLength={4000} value={message} disabled={busy || editing} onChange={e => setMessage(e.target.value)} placeholder={workspace?.runStatus === "paused" ? "输入补充要求，或发送“继续”" : user.permissions.approveLeave ? "例如：原因改为家中有事 / 批准这条 / 确认执行" : "例如：明天下午请事假，原因：家中有事"} />{busy && pendingMessage ? <button type="button" className="pause-run" aria-label="暂停运行" title="在当前安全边界暂停" disabled={pausing || !workspace} onClick={() => void pauseRun()}>{pausing ? <LoaderCircle className="spin" size={18} /> : <Pause size={18} fill="currentColor" />}</button> : <button aria-label="发送" disabled={editing || !message.trim()}><Send size={18} /></button>}</form>
     <div className="oa-form-toggle"><button disabled={busy || editing || !catalog} onClick={() => setFormOpen(v => !v)}>{formOpen ? "收起办理表单" : "办理业务"}</button><span>复杂信息也可直接在这里填写</span></div>
     {formOpen && catalog && <OperationForm catalog={catalog} workspace={workspace} busy={busy} prepare={async (op, target, data) => {
       const result = await run(async () => {
-        const id = workspace?.id || (await api.agentMessage(userId, "帮助")).conversation.id;
+        const id = workspace?.id || (await api.createChatWorkspace(userId)).id;
         return api.prepareChat(id, op, target, data);
       });
       if (result) setFormOpen(false);

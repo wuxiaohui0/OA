@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Bot,
+  ChartNoAxesCombined,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
@@ -14,8 +15,11 @@ import {
   Menu,
   MessageSquareText,
   Plus,
+  Plane,
+  ShoppingCart,
   ShieldCheck,
   Sparkles,
+  Timer,
   Users,
   XCircle,
 } from "lucide-react";
@@ -34,8 +38,13 @@ import AuthGate from "./Auth";
 import LeaveDrawer from "./LeaveDetail";
 import PilotPage from "./PilotPage";
 import Assistant from "./Assistant";
+import AnalyticsPage from "./AnalyticsPage";
+import ExpensePage from "./ExpensePage";
+import TravelPage from "./TravelPage";
+import ProcurementPage from "./ProcurementPage";
+import OvertimePage from "./OvertimePage";
 
-type Page = "assistant" | "dashboard" | "apply" | "mine" | "inbox" | "organization" | "calendar" | "ledger" | "notifications" | "admin";
+type Page = "assistant" | "dashboard" | "apply" | "mine" | "inbox" | "organization" | "calendar" | "ledger" | "notifications" | "admin" | "analytics" | "expenses" | "travel" | "procurement" | "overtime";
 
 const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "dashboard", label: "工作台", icon: LayoutDashboard },
@@ -46,6 +55,10 @@ const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = 
   { page: "calendar", label: "工作日历", icon: CalendarDays },
   { page: "ledger", label: "假期台账", icon: FileText },
   { page: "notifications", label: "消息通知", icon: MessageSquareText },
+  { page: "expenses", label: "费用报销", icon: FileText },
+  { page: "travel", label: "出差申请", icon: Plane },
+  { page: "procurement", label: "采购申请", icon: ShoppingCart },
+  { page: "overtime", label: "加班与调休", icon: Timer },
 ];
 
 function formatDateTime(value: string, includeYear = false): string {
@@ -254,12 +267,17 @@ function Workspace({ userId, onLogout, onPassword }: { userId: string; onLogout:
             <button className={page === itemPage ? "active" : ""} key={itemPage} onClick={() => navigate(itemPage)}>
               <Icon size={19} />{label}
               {itemPage === "inbox" && data.stats.pending > 0 && <span className="nav-count">{data.stats.pending}</span>}
+              {itemPage === "expenses" && data.stats.expensePending > 0 && <span className="nav-count">{data.stats.expensePending}</span>}
+              {itemPage === "travel" && data.stats.travelPending > 0 && <span className="nav-count">{data.stats.travelPending}</span>}
+              {itemPage === "procurement" && data.stats.procurementPending > 0 && <span className="nav-count">{data.stats.procurementPending}</span>}
+              {itemPage === "overtime" && data.stats.overtimePending > 0 && <span className="nav-count">{data.stats.overtimePending}</span>}
               {itemPage === "notifications" && data.unreadNotifications > 0 && <span className="nav-count">{data.unreadNotifications}</span>}
             </button>
           ))}
           <span className="nav-caption second">组织协同</span>
           <button className={page === "organization" ? "active" : ""} onClick={() => navigate("organization")}><Users size={19} />{data.currentUser.permissions.manageOrganization ? "组织与人员" : "通讯录"}</button>
           {data.currentUser.permissions.manageOrganization && <button className={page === "admin" ? "active" : ""} onClick={() => navigate("admin")}><Inbox size={19} />请假管理</button>}
+          {data.currentUser.permissions.manageOrganization && <button className={page === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}><ChartNoAxesCombined size={19} />数据分析</button>}
         </nav>
         <div className="sidebar-footer">
           <div className="security-chip"><ShieldCheck size={16} /><div><strong>安全运行中</strong><span>操作全程留痕</span></div></div>
@@ -270,9 +288,9 @@ function Workspace({ userId, onLogout, onPassword }: { userId: string; onLogout:
       <main>
         <header className="topbar">
           <button className="mobile-menu" aria-label="打开导航" onClick={() => setMobileNav((value) => !value)}><Menu size={21} /></button>
-          <span className="workspace-caption">请假审批 · 部门试点</span>
+          <span className="workspace-caption">FlowMind · 智能 OA 审批中心</span>
           <div className="top-actions">
-            <span className="agent-mode"><Sparkles size={14} />{data.agentMode === "deep-agent" ? "AI 辅助 · 人工审批" : "规则辅助 · 人工审批"}</span>
+            <span className="agent-mode"><Sparkles size={14} />{data.agentMode === "deep-agent" ? "AI 辅助 · 人工审批" : "智能体未配置 · 人工审批"}</span>
             <button className="icon-button" aria-label="打开智能助手" title="打开智能助手" onClick={() => navigate("assistant")}><Bot size={18} /></button>
             <span className="signed-in-user" title={`${data.currentUser.name} · ${data.currentUser.title}`}>{data.currentUser.name} · {data.currentUser.title}</span>
             <button className="icon-button" title="修改密码" aria-label="修改密码" onClick={onPassword}><KeyRound size={18} /></button>
@@ -286,7 +304,7 @@ function Workspace({ userId, onLogout, onPassword }: { userId: string; onLogout:
           {page === "dashboard" && (
             <>
               <div className="page-heading">
-                <div><span className="eyebrow">GOOD AFTERNOON</span><h1>{data.currentUser.name}，今天想处理什么？</h1><p>你的审批、假期余额与智能助手都在这里。</p></div>
+                <div><span className="eyebrow">GOOD AFTERNOON</span><h1>{data.currentUser.name}，今天想处理什么？</h1><p>你的审批、出差、报销、采购、加班调休、假期余额与智能助手都在这里。</p></div>
                 <button className="button primary" onClick={() => setPage("apply")}><Plus size={17} />发起申请</button>
               </div>
               <OrganizationSummary data={data} />
@@ -297,7 +315,7 @@ function Workspace({ userId, onLogout, onPassword }: { userId: string; onLogout:
                 <div className="metric-card"><span className="metric-icon violet"><Bot /></span><div><span>辅助检查</span><strong>{data.stats.agentHandled}</strong><small>等待人工最终确认</small></div></div>
               </div>
               <div className="dashboard-grid">
-                <section className="assistant-launch"><Sparkles size={28} /><h2>智能 OA 助手</h2><p>请假、销假、材料和进度查询{data.currentUser.permissions.approveLeave ? "，以及审批待办" : ""}{data.currentUser.permissions.manageOrganization ? "和人员管理" : ""}，直接说出需求，在对话中核对并完成。</p><button className="button primary" onClick={() => navigate("assistant")}>打开智能助手</button></section>
+                <section className="assistant-launch"><Sparkles size={28} /><h2>智能 OA 助手</h2><p>请假、出差、采购、加班调休、销假、材料和进度查询{data.currentUser.permissions.approveLeave ? "，以及审批待办" : ""}{data.currentUser.permissions.manageOrganization ? "和人员管理" : ""}，直接说出需求，在对话中核对并完成。</p><button className="button primary" onClick={() => navigate("assistant")}>打开智能助手</button></section>
                 <section className="balance-card">
                   <div className="section-heading"><div><span className="eyebrow">BALANCE</span><h2>我的假期</h2></div><CalendarDays size={20} /></div>
                   <div className="balance-list">
@@ -360,6 +378,11 @@ function Workspace({ userId, onLogout, onPassword }: { userId: string; onLogout:
             </>
           )}
           {(["calendar", "ledger", "notifications", "admin"] as string[]).includes(page) && <PilotPage key={page} page={page as "calendar" | "ledger" | "notifications" | "admin"} data={data} onChanged={refresh} onSelect={setSelected} onOpen={openRequest} />}
+          {page === "analytics" && data.currentUser.permissions.manageOrganization && <AnalyticsPage userId={userId} data={data} onOpen={openRequest} />}
+          {page === "expenses" && <ExpensePage userId={userId} data={data} onChanged={refresh} />}
+          {page === "travel" && <TravelPage userId={userId} data={data} onChanged={refresh} />}
+          {page === "procurement" && <ProcurementPage userId={userId} data={data} onChanged={refresh} />}
+          {page === "overtime" && <OvertimePage userId={userId} data={data} onChanged={refresh} />}
           {page === "organization" && <OrganizationPage key={userId} data={data} onChanged={refresh} />}
         </div>
       </main>

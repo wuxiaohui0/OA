@@ -103,6 +103,90 @@ CREATE TABLE IF NOT EXISTS notifications (
     event_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, read_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id,id);
+CREATE TABLE IF NOT EXISTS expense_requests (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL REFERENCES users(id),
+    category TEXT NOT NULL, amount REAL NOT NULL CHECK(amount > 0), currency TEXT NOT NULL DEFAULT 'CNY',
+    occurred_at TEXT NOT NULL, description TEXT NOT NULL, payment_method TEXT NOT NULL,
+    travel_request_id TEXT REFERENCES travel_requests(id),
+    status TEXT NOT NULL DEFAULT 'draft', current_approver_id TEXT REFERENCES users(id),
+    version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_expense_applicant ON expense_requests(applicant_id, status);
+CREATE INDEX IF NOT EXISTS idx_expense_approver ON expense_requests(current_approver_id, status);
+CREATE TABLE IF NOT EXISTS expense_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES expense_requests(id),
+    actor_id TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_expense_action_request ON expense_actions(request_id, id);
+CREATE TABLE IF NOT EXISTS travel_requests (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL REFERENCES users(id),
+    destination TEXT NOT NULL, purpose TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT NOT NULL,
+    traveler_ids TEXT NOT NULL DEFAULT '[]', transport_standard TEXT NOT NULL DEFAULT 'economy',
+    accommodation_standard TEXT NOT NULL DEFAULT 'standard', status TEXT NOT NULL DEFAULT 'draft',
+    current_approver_id TEXT REFERENCES users(id), version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_travel_applicant ON travel_requests(applicant_id, status);
+CREATE INDEX IF NOT EXISTS idx_travel_approver ON travel_requests(current_approver_id, status);
+CREATE TABLE IF NOT EXISTS travel_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES travel_requests(id),
+    actor_id TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_travel_action_request ON travel_actions(request_id, id);
+CREATE TABLE IF NOT EXISTS procurement_requests (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL, purpose TEXT NOT NULL, items_json TEXT NOT NULL,
+    budget REAL NOT NULL CHECK(budget > 0), estimated_amount REAL NOT NULL CHECK(estimated_amount > 0),
+    currency TEXT NOT NULL DEFAULT 'CNY', supplier TEXT, need_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft', current_approver_id TEXT REFERENCES users(id),
+    version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_applicant ON procurement_requests(applicant_id, status);
+CREATE INDEX IF NOT EXISTS idx_procurement_approver ON procurement_requests(current_approver_id, status);
+CREATE TABLE IF NOT EXISTS procurement_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES procurement_requests(id),
+    actor_id TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_action_request ON procurement_actions(request_id, id);
+CREATE TABLE IF NOT EXISTS overtime_requests (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL REFERENCES users(id),
+    start_at TEXT NOT NULL, end_at TEXT NOT NULL, hours REAL NOT NULL CHECK(hours > 0),
+    reason TEXT NOT NULL, compensation_type TEXT NOT NULL DEFAULT 'comp_leave',
+    status TEXT NOT NULL DEFAULT 'draft', current_approver_id TEXT REFERENCES users(id),
+    version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_overtime_applicant ON overtime_requests(applicant_id, status);
+CREATE INDEX IF NOT EXISTS idx_overtime_approver ON overtime_requests(current_approver_id, status);
+CREATE TABLE IF NOT EXISTS overtime_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES overtime_requests(id),
+    actor_id TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_overtime_action_request ON overtime_actions(request_id, id);
+CREATE TABLE IF NOT EXISTS comp_time_requests (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL REFERENCES users(id),
+    date TEXT NOT NULL, hours REAL NOT NULL CHECK(hours > 0), reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft', current_approver_id TEXT REFERENCES users(id),
+    version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_comp_time_applicant ON comp_time_requests(applicant_id, status);
+CREATE INDEX IF NOT EXISTS idx_comp_time_approver ON comp_time_requests(current_approver_id, status);
+CREATE TABLE IF NOT EXISTS comp_time_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES comp_time_requests(id),
+    actor_id TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comp_time_action_request ON comp_time_actions(request_id, id);
+CREATE TABLE IF NOT EXISTS comp_time_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, entry_key TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL REFERENCES users(id), overtime_request_id TEXT REFERENCES overtime_requests(id),
+    comp_time_request_id TEXT REFERENCES comp_time_requests(id), delta_hours REAL NOT NULL,
+    reason TEXT NOT NULL, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comp_time_ledger_user ON comp_time_ledger(user_id, id);
 CREATE TABLE IF NOT EXISTS assistant_conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),

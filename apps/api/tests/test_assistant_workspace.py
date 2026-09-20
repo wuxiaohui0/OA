@@ -54,8 +54,6 @@ def test_role_catalog_and_backend_agree(client, app):
     assert APPROVAL_OPS | ADMIN_OPS <= hr
     for operation in APPROVAL_OPS | ADMIN_OPS:
         prepare(client, operation, status=403)
-    for message in ("待我审批", "审批记录", "销假待办", "批准这条"):
-        api(client, "POST", "/agent/messages", {"message": message}, status=403)
     assert not app.state.db.all("SELECT id FROM assistant_actions")
     # Capability flags, rather than the built-in role name, control availability.
     app.state.db.execute("UPDATE permission_roles SET can_approve_leave=1 WHERE id='employee'")
@@ -63,37 +61,218 @@ def test_role_catalog_and_backend_agree(client, app):
     assert APPROVAL_OPS <= custom
 
 
-@pytest.mark.parametrize("message,reason", [
-    ("请假明天，原因是家中又是", "家中又是"),
-    ("明天请假，原因是昨天没休息号，要休息。", "昨天没休息号，要休息。"),
-])
-def test_screenshot_leave_works_without_calling_configured_model(client, app, monkeypatch, message, reason):
+def test_enterprise_agent_profiles_bind_least_privilege_tools_and_skills(client, app, admin):
+    employee = api(client, "GET", "/agent/catalog")
+    assert employee["agent"]["profileId"] == "employee"
+    assert employee["agent"]["instanceId"] == "employee:u1001"
+    assert "approval.prepare" not in employee["agent"]["tools"]
+    assert [skill["id"] for skill in employee["agent"]["skills"]] == [
+        "leave-self-service", "policy-guidance"
+    ]
+
+    leader = api(client, "GET", "/agent/catalog", user="u2001")["agent"]
+    assert leader["profileId"] == "approval-leader"
+    assert {"team.query", "approval.query", "approval.prepare"} <= set(leader["tools"])
+    assert "organization.prepare" not in leader["tools"]
+    assert leader["scope"]["directReportCount"] == 2
+
+    hr = api(client, "GET", "/agent/catalog", user="u3001")["agent"]
+    assert hr["profileId"] == "hr-governance"
+    assert {"approval.prepare", "organization.query", "organization.prepare"} <= set(hr["tools"])
+    assert {"approval-governance", "organization-governance"} <= {
+        skill["id"] for skill in hr["skills"]
+    }
+
+    administrator = api(client, "GET", "/agent/catalog", user=admin)["agent"]
+    assert administrator["profileId"] == "enterprise-admin"
+    assert "account.prepare" in administrator["tools"]
+    assert "account-governance" in {skill["id"] for skill in administrator["skills"]}
+
+    # A team-lead capability does not implicitly grant approval tools.
+    app.state.db.execute(
+        "INSERT INTO permission_roles VALUES('team-only','团队负责人',0,1,0,0)"
+    )
+    app.state.db.execute("UPDATE users SET role='team-only' WHERE id='u1002'")
+    team = api(client, "GET", "/agent/catalog", user="u1002")["agent"]
+    assert team["profileId"] == "team-leader"
+    assert "team.query" in team["tools"]
+    assert "approval.prepare" not in team["tools"]
+    assert not ({"approve", "reject"} & {
+        item["operation"] for item in api(client, "GET", "/agent/catalog", user="u1002")["items"]
+    })
+
+
+def test_model_agent_binding_denies_unassigned_query_and_registers_leader_tools(
+    client, monkeypatch
+):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    observed = {}
+
+    def build(name, tools, schema, prompt):
+        observed[name] = {"tools": {item.name: item for item in tools}, "prompt": prompt}
+        return name
+
+    async def invoke(agent, messages):
+        if agent == "employee:u1001":
+            denied = await observed[agent]["tools"]["query_oa"].ainvoke(
+                {"resource": "requests", "scope": "all"}
+            )
+            assert denied == {"ok": False, "message": "当前智能体未绑定该查询能力"}
+        return {"structured_response": {
+            "status": "no_action", "message": "未执行操作。", "missingFields": []
+        }}
+
+    monkeypatch.setattr(assistant_agent, "build_agent", build)
+    monkeypatch.setattr(assistant_agent, "invoke", invoke)
+    chat(client, "分析一下我近期的安排")
+    chat(client, "分析一下团队近期的安排", user="u2001")
+
+    employee_tools = observed["employee:u1001"]["tools"]
+    leader_tools = observed["approval-leader:u2001"]["tools"]
+    assert "query_approval_workbench" not in employee_tools
+    assert {"query_approval_workbench", "prepare_approval_action", "query_team_directory"} <= set(leader_tools)
+    assert "审批治理" not in observed["employee:u1001"]["prompt"]
+    assert "审批治理" in observed["approval-leader:u2001"]["prompt"]
+
+
+def test_configured_agent_handles_greeting_instead_of_local_shortcut(client, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    observed = {}
+
+    def build(name, tools, schema, prompt):
+        observed["name"] = name
+        observed["prompt"] = prompt
+        return object()
+
+    async def invoke(_agent, messages):
+        observed["messages"] = messages
+        return {"structured_response": {
+            "status": "no_action", "message": "你好，今天需要我协助什么 OA 事项？", "missingFields": []
+        }}
+
+    monkeypatch.setattr(assistant_agent, "build_agent", build)
+    monkeypatch.setattr(assistant_agent, "invoke", invoke)
+    workspace = chat(client, "你好")
+
+    assert observed["name"] == "employee:u1001"
+    assert observed["messages"][-1] == {"role": "user", "content": "你好"}
+    assert "每一轮普通对话都由你理解并回复" in observed["prompt"]
+    assert workspace["messages"][-1]["content"] == "你好，今天需要我协助什么 OA 事项？"
+
+
+def test_simple_date_question_uses_agent_context_not_work_calendar(client, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    observed = {}
+
+    def build(_name, tools, _schema, prompt):
+        observed["tools"] = {item.name: item for item in tools}
+        observed["prompt"] = prompt
+        return object()
+
+    async def invoke(*_args):
+        observed["datetime"] = await observed["tools"]["get_current_datetime"].ainvoke({})
+        current = observed["datetime"]
+        return {"structured_response": {
+            "status": "no_action",
+            "message": f"今天是 {current['date']}，{current['weekday']}。",
+            "missingFields": [],
+        }}
+
+    monkeypatch.setattr(assistant_agent, "build_agent", build)
+    monkeypatch.setattr(assistant_agent, "invoke", invoke)
+    workspace = chat(client, "今天几号")
+
+    now = datetime.now(SHANGHAI)
+    assert observed["datetime"]["timezone"] == "Asia/Shanghai"
+    assert "get_current_datetime" in observed["prompt"]
+    assert workspace["cards"] == []
+    assert now.date().isoformat() in workspace["messages"][-1]["content"]
+    assert "智能理解暂不可用" not in workspace["messages"][-1]["content"]
+
+
+def test_internal_leave_calendar_query_does_not_render_calendar_card(client, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    tools = {}
+
+    def build(_name, registered, _schema, _prompt):
+        tools.update({item.name: item for item in registered})
+        return object()
+
+    async def invoke(*_args):
+        calendar = await tools["query_oa"].ainvoke({"resource": "calendar"})
+        assert calendar["interpretation"].startswith("days 仅包含特殊日期设置")
+        return {"structured_response": {
+            "status": "needs_information", "message": "请补充请假日期。", "missingFields": ["请假日期"]
+        }}
+
+    monkeypatch.setattr(assistant_agent, "build_agent", build)
+    monkeypatch.setattr(assistant_agent, "invoke", invoke)
+    workspace = chat(client, "帮我办理请假")
+    assert workspace["cards"] == []
+    assert workspace["messages"][-1]["content"] == "请补充请假日期。"
+
+
+def test_calendar_card_explains_empty_overrides_as_default_week(client, gateway):  # noqa: F811
+    steps, _ = gateway
+    steps.extend([
+        tool_reply("query_oa", {"resource": "calendar", "present": True}),
+        structured({"status": "no_action", "message": "已查询工作日历。", "missingFields": []}),
+    ])
+    workspace = chat(client, "工作日历")
+    calendar = workspace["cards"][0]
+    assert calendar["kind"] == "calendar"
+    assert calendar["defaultWorkdays"] == ["周一", "周二", "周三", "周四", "周五"]
+    assert calendar["defaultSessions"] == ["09:00-12:00", "13:30-18:00"]
+    assert "并不表示没有工作日" in calendar["interpretation"]
+
+
+def test_smalltalk_is_natural_and_does_not_keep_stale_query_cards(client, gateway):  # noqa: F811
+    steps, _ = gateway
+    steps.extend([
+        tool_reply("query_oa", {"resource": "notifications", "present": True}),
+        structured({"status": "no_action", "message": "已查询消息通知。", "missingFields": []}),
+        structured({"status": "no_action", "message": "你好，陈默。今天想查点什么，还是要办一件事？", "missingFields": []}),
+        structured({"status": "no_action", "message": "我是你的 OA 智能助手，会按你的身份和权限协助办理，但不会替你确认。", "missingFields": []}),
+        structured({"status": "no_action", "message": "我是企业内部的 OA 智能体，底层模型由平台统一配置。", "missingFields": []}),
+    ])
+    workspace = chat(client, "消息通知")
+    assert workspace["cards"][0]["kind"] == "notifications"
+
+    workspace = chat(client, "你号", workspace["id"])
+    assert workspace["cards"] == []
+    assert workspace["messages"][-2] == {"role": "user", "content": "你号"}
+    assert workspace["messages"][-1]["content"] == "你好，陈默。今天想查点什么，还是要办一件事？"
+
+    workspace = chat(client, "你是谁", workspace["id"])
+    assert workspace["cards"] == []
+    assert "OA 智能助手" in workspace["messages"][-1]["content"]
+    assert "不会替你确认" in workspace["messages"][-1]["content"]
+
+    workspace = chat(client, "你是什么模型", workspace["id"])
+    answer = workspace["messages"][-1]["content"]
+    assert "企业内部的 OA 智能体" in answer
+    assert "Codex" not in answer and "GPT-5" not in answer
+
+
+@pytest.mark.parametrize("message", [
+    "请假明天，原因是家中又是",
+    "明天请假，原因是昨天没休息号，要休息。",
+])
+def test_unconfigured_model_fails_closed_without_local_intent_routing(
+    client, app, monkeypatch, message
+):
     def no_model(*args, **kwargs):
-        pytest.fail("A basic command should not wait for the model")
+        pytest.fail("An unconfigured runtime must not construct a model")
     monkeypatch.setattr(assistant_agent, "build_agent", no_model)
-    day = tomorrow_workday(app)
     workspace = chat(client, message)
-    assert workspace["action"]["operation"] == "apply_leave"
-    assert workspace["action"]["status"] == "pending"
+    assert workspace["action"] is None
+    assert workspace["cards"] == []
     assert not app.state.db.list_leaves("u1001")["mine"]
-    workspace = confirm(client, workspace)
-    leave = workspace["context"]["leave"]
-    assert leave["applicantId"] == "u1001" and leave["reason"] == reason
-    assert leave["startAt"].startswith(day) and leave["durationHours"] == 7.5
-    assert leave["status"] == "human_reviewing" and leave["currentApproverId"] == "u2001"
-    assert app.state.db.list_leaves("u2001")["inbox"][0]["id"] == leave["id"]
-    confirm(client, workspace)
-    assert len(app.state.db.list_leaves("u1001")["mine"]) == 1
-    assert len([a for a in app.state.db.actions(leave["id"]) if a["action"] == "submit"]) == 1
-    workspace = chat(client, "我的申请", workspace["id"])
-    assert workspace["cards"][0]["items"][0]["id"] == leave["id"]
-    summary = chat(client, "帮助")["messages"][-1]["content"]
-    assert "逐笔批准" not in summary and "维护组织" not in summary
+    assert "模型尚未配置" in workspace["messages"][-1]["content"]
 
 
 @pytest.mark.parametrize("failure", [TimeoutError, RuntimeError])
-def test_model_failure_keeps_basic_leave_and_multiturn_usable(client, app, monkeypatch, failure):
+def test_model_failure_fails_closed_without_keyword_fallback(client, app, monkeypatch, failure):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(assistant_agent, "build_agent", lambda *args: object())
     calls = []
@@ -104,14 +283,11 @@ def test_model_failure_keeps_basic_leave_and_multiturn_usable(client, app, monke
     tomorrow_workday(app)
     workspace = chat(client, "帮我办理请假")
     assert workspace["action"] is None
-    assert "请假日期" in workspace["messages"][-1]["content"]
+    assert "暂时不可用" in workspace["messages"][-1]["content"]
     assert "Upstream failure" not in workspace["messages"][-1]["content"]
     workspace = chat(client, "明天，原因：家里有事", workspace["id"])
-    assert workspace["action"]["operation"] == "apply_leave" and len(calls) == 1
+    assert workspace["action"] is None and len(calls) == 2
     assert not app.state.db.list_leaves("u1001")["mine"]
-    confirm(client, workspace)
-    confirm(client, workspace)
-    assert len(app.state.db.list_leaves("u1001")["mine"]) == 1
 
 
 def test_model_catalog_is_scoped_and_timeout_preserves_prepared_action(client, app, monkeypatch, leave_input):
@@ -134,21 +310,29 @@ def test_model_catalog_is_scoped_and_timeout_preserves_prepared_action(client, a
     assert not app.state.db.list_leaves("u1001")["mine"]
 
 
-def test_leave_reason_is_not_treated_as_an_approval_command(client, app, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    tomorrow_workday(app)
+def test_leave_reason_is_not_treated_as_an_approval_command(
+    client, app, gateway, leave_input  # noqa: F811
+):
+    steps, _ = gateway
+    payload = {**leave_input, "reason": "家人申请被驳回，需要协助处理"}
+    steps.extend([
+        tool_reply("apply_leave", payload),
+        structured({"status": "no_action", "message": "请确认请假卡片。", "missingFields": []}),
+    ])
     workspace = chat(client, "明天请事假，原因：家人申请被驳回，需要协助处理")
     assert workspace["action"]["operation"] == "apply_leave"
     workspace = confirm(client, workspace)
     assert workspace["context"]["leave"]["reason"] == "家人申请被驳回，需要协助处理"
 
 
-def test_implicit_reason_preview_can_be_revised_and_requires_confirmation(client, app, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    def no_model(*args, **kwargs):
-        pytest.fail("Simple leave requests should produce a confirmation card locally")
-    monkeypatch.setattr(assistant_agent, "build_agent", no_model)
-    tomorrow_workday(app)
+def test_implicit_reason_preview_can_be_revised_and_requires_confirmation(
+    client, app, gateway, leave_input  # noqa: F811
+):
+    steps, _ = gateway
+    steps.extend([
+        tool_reply("apply_leave", {**leave_input, "reason": "家中有事"}),
+        structured({"status": "no_action", "message": "请确认请假卡片。", "missingFields": []}),
+    ])
     first = chat(client, "明天请假，家中有事")
     assert first["action"]["status"] == "pending"
     values = first["action"]["editableData"]
@@ -191,9 +375,8 @@ def test_model_clarification_choices_keep_context_and_do_not_execute(client, app
     assert not app.state.db.list_leaves("u1001")["mine"]
 
 
-def test_chat_create_edit_submit_approve_and_repeat(client, app, leave_input):
-    date = datetime.fromisoformat(leave_input["startAt"])
-    workspace = chat(client, f"{date.year}年{date.month}月{date.day}日请病假，先存草稿，原因：身体不适需要休息")
+def test_create_edit_submit_approve_and_repeat(client, app, leave_input):
+    workspace = prepare(client, "create_leave", data=leave_input)
     assert workspace["action"]["operation"] == "create_leave"
     assert not app.state.db.list_leaves("u1001")["mine"]
     workspace = confirm(client, workspace)
@@ -202,17 +385,21 @@ def test_chat_create_edit_submit_approve_and_repeat(client, app, leave_input):
     repeat = confirm(client, workspace)
     assert repeat["context"]["leave"]["id"] == leave["id"]
     assert len(app.state.db.list_leaves("u1001")["mine"]) == 1
-    workspace = chat(client, "原因改为需要到医院检查", workspace["id"])
+    workspace = prepare(
+        client,
+        "edit_leave",
+        leave["id"],
+        {"reason": "需要到医院检查"},
+        conversation=workspace["id"],
+    )
     assert workspace["action"]["operation"] == "edit_leave"
     assert app.state.db.leave(leave["id"])["reason"] == "身体不适需要休息"
-    workspace = chat(client, "确认执行", workspace["id"], actionId=workspace["action"]["id"])
+    workspace = confirm(client, workspace)
     assert workspace["context"]["leave"]["reason"] == "需要到医院检查"
-    workspace = chat(client, "提交这条", workspace["id"])
+    workspace = prepare(client, "submit", leave["id"], conversation=workspace["id"])
     workspace = confirm(client, workspace)
     assert workspace["context"]["leave"]["status"] == "human_reviewing"
-    manager = chat(client, "待我审批", user="u2001")
-    assert manager["cards"][0]["items"][0]["id"] == leave["id"]
-    manager = chat(client, "批准这条", manager["id"], "u2001")
+    manager = prepare(client, "approve", leave["id"], user="u2001")
     assert app.state.db.leave(leave["id"])["status"] == "human_reviewing"
     assert app.state.db.remaining("u1001", "sick") == 80
     manager = confirm(client, manager, "u2001")
@@ -239,10 +426,8 @@ def test_permission_isolation_stale_preview_and_expiry(client, app, leave_input)
 def test_ambiguous_objects_require_selection_and_confirmation_is_exact(client, app, leave_input):
     first = create(client, leave_input)
     second = create(client, {**leave_input, "reason": "另一条申请"})
-    workspace = chat(client, "提交申请")
-    assert workspace["action"] is None
-    assert len(workspace["cards"][0]["items"]) == 2
-    workspace = chat(client, "选择申请:" + second["id"], workspace["id"])
+    prepare(client, "submit", status=404)
+    workspace = prepare(client, "submit", second["id"])
     assert workspace["action"]["targetId"] == second["id"]
     workspace = chat(client, "好的", workspace["id"], actionId=workspace["action"]["id"])
     assert app.state.db.leave(second["id"])["status"] == "draft"
@@ -304,15 +489,21 @@ def test_hr_preview_has_no_side_effect_and_changes_are_atomic(client, app, leave
 
 def test_chat_materials_and_queries_share_page_permissions(client, app, leave_input):
     leave = create(client, leave_input)
-    workspace = chat(client, "选择申请:" + leave["id"])
+    workspace = chat(client, "打开申请", contextId=leave["id"])
     headers = {**auth_headers(app), "x-filename": "proof.pdf", "content-type": "application/octet-stream"}
     response = client.post(f"/api/agent/workspace/{workspace['id']}/attachments", headers=headers, content=b"%PDF-1.4 fixture")
     assert response.status_code == 200, response.text
     assert len(response.json()["context"]["attachments"]) == 1
-    for text, kind in [("我的余额", "ledger"), ("工作日历", "calendar"), ("消息通知", "notifications"), ("组织人员", "organization")]:
-        assert chat(client, text, workspace["id"])["cards"][0]["kind"] == kind
-    api(client, "POST", "/agent/messages", {"message": "查看详情", "contextId": leave["id"]}, "u1002", 403)
     service = app.state.assistant_service
+    user = app.state.db.user("u1001")
+    for resource, kind in [
+        ("ledger", "ledger"),
+        ("calendar", "calendar"),
+        ("notifications", "notifications"),
+        ("organization", "organization"),
+    ]:
+        assert service.query(user, resource)["kind"] == kind
+    api(client, "POST", "/agent/messages", {"message": "查看详情", "contextId": leave["id"]}, "u1002", 403)
     import pytest
     from oa.domain import BusinessError
     with pytest.raises(BusinessError):
@@ -392,17 +583,19 @@ def test_replaced_actions_cannot_execute_and_long_chat_can_confirm(client, app, 
 
 def test_unknown_target_does_not_fall_back_to_selected_request(client, app, leave_input):
     leave = pending(client, leave_input)
-    workspace = chat(client, "选择申请:" + leave["id"], user="u2001")
-    workspace = chat(client, "批准不存在员工的申请", workspace["id"], "u2001")
-    assert workspace["action"] is None
-    workspace = chat(client, "选择申请:" + leave["id"], workspace["id"], "u2001")
+    prepare(client, "approve", "missing-request", user="u2001", status=404)
+    workspace = prepare(client, "approve", leave["id"], user="u2001")
     assert workspace["action"]["targetId"] == leave["id"]
 
 
 def test_reason_dates_do_not_change_leave_period(client, leave_input):
     leave = create(client, leave_input)
-    workspace = chat(client, "选择申请:" + leave["id"])
-    workspace = chat(client, "原因改为明天下午要到医院检查", workspace["id"])
+    workspace = prepare(
+        client,
+        "edit_leave",
+        leave["id"],
+        {"reason": "明天下午要到医院检查"},
+    )
     workspace = confirm(client, workspace)
     assert workspace["context"]["leave"]["startAt"] == leave["startAt"]
     assert workspace["context"]["leave"]["endAt"] == leave["endAt"]
@@ -418,7 +611,7 @@ def test_model_prepares_action_but_cannot_execute_it(client, app, gateway, leave
     assert "请核对" in workspace["messages"][-1]["content"]
     assert not app.state.db.list_leaves("u1001")["mine"]
     names = {t["function"]["name"] for t in requests[0]["tools"]}
-    assert {"query_oa", "apply_leave", "prepare_oa_action", "get_leave_policy"} <= names
+    assert {"query_oa", "apply_leave", "prepare_oa_action", "get_leave_policy", "get_current_datetime"} <= names
     assert not any("confirm" in n or "execute" in n for n in names)
     workspace = confirm(client, workspace)
     assert workspace["context"]["leave"]["status"] == "human_reviewing"

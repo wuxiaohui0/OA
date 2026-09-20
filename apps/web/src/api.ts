@@ -126,6 +126,7 @@ export interface AssistantConversation {
   messages: { role: "user" | "assistant"; content: string }[];
   draft: LeaveRequest | null;
   busy: boolean;
+  runStatus: "idle" | "running" | "paused" | "completed";
 }
 
 export interface AssistantAction {
@@ -149,23 +150,35 @@ export type ChatCard =
   | ({ kind: "request"; title: string } & LeaveDetail)
   | { kind: "cancellations"; title: string; items: CancellationInboxItem[] }
   | ({ kind: "ledger"; title: string; employeeId: string } & LedgerData)
-  | { kind: "calendar"; title: string; days: CalendarDay[] }
+  | { kind: "calendar"; title: string; timezone?: string; defaultWorkdays?: string[]; defaultSessions?: string[];
+      today?: { day: string; isWorkday: boolean; source: string }; interpretation?: string; days: CalendarDay[] }
   | { kind: "notifications"; title: string; items: Notification[]; unread: number }
   | ({ kind: "organization"; title: string } & DirectoryData)
   | ({ kind: "employee"; title: string } & EmployeeDetail);
+export interface AgentProfile {
+  instanceId: string;
+  profileId: string;
+  profileVersion: string;
+  name: string;
+  mission: string;
+  tools: string[];
+  skills: { id: string; name: string }[];
+  scope: { department: string; ledDepartments: string[]; directReportCount: number };
+}
 export interface ChatWorkspace extends AssistantConversation {
   context: LeaveDetail | null;
   action: AssistantAction | null;
   cards: ChatCard[];
+  agent: AgentProfile;
   clarification?: { message: string; missingFields: string[]; choices: string[] } | null;
 }
 export interface ChatSchema {
   type?: string; enum?: (string | number)[]; const?: string | number; anyOf?: ChatSchema[]; $ref?: string;
-  properties?: Record<string, ChatSchema>; required?: string[]; $defs?: Record<string, ChatSchema>;
-  default?: unknown; minimum?: number; maximum?: number;
+  properties?: Record<string, ChatSchema>; items?: ChatSchema; required?: string[]; $defs?: Record<string, ChatSchema>;
+  default?: unknown; minimum?: number; maximum?: number; minItems?: number; maxItems?: number;
 }
-export interface ChatOperation { operation: string; title: string; target: string | null; schema: ChatSchema }
-export interface ChatCatalog { items: ChatOperation[]; labels: Record<string, string>; directory: DirectoryData }
+export interface ChatOperation { operation: string; title: string; target: string | null; schema: ChatSchema; labels?: Record<string, string> }
+export interface ChatCatalog { items: ChatOperation[]; labels: Record<string, string>; directory: DirectoryData; agent: AgentProfile }
 
 export interface BootstrapData {
   currentUser: User;
@@ -183,13 +196,154 @@ export interface BootstrapData {
     approved: number;
     inProgress: number;
     agentHandled: number;
+    expensePending: number;
+    expenseApproved: number;
+    travelPending: number;
+    travelApproved: number;
+    procurementPending: number;
+    procurementApproved: number;
+    overtimePending: number;
+    overtimeApproved: number;
   };
-  agentMode: "deep-agent" | "deterministic-fallback";
+  expenses: ExpenseLists;
+  travelRequests: TravelLists;
+  procurementRequests: ProcurementLists;
+  overtimeRequests: { overtime: OvertimeLists; compTime: OvertimeLists; balance: number };
+  agentMode: "deep-agent" | "agent-unavailable";
   agentConfig: {
     protocol: "openai-compatible";
     model: string;
     baseUrl: string;
   };
+}
+
+export type ExpenseStatus = "draft" | "human_reviewing" | "approved" | "rejected" | "withdrawn";
+export type ExpenseCategory = "travel" | "meal" | "office" | "software" | "other";
+export type ExpensePaymentMethod = "personal" | "corporate_card" | "cash" | "other";
+export interface ExpenseRequest {
+  id: string;
+  applicantId: string;
+  applicantName: string;
+  department: string;
+  category: ExpenseCategory;
+  amount: number;
+  currency: "CNY" | "USD" | "EUR";
+  occurredAt: string;
+  description: string;
+  paymentMethod: ExpensePaymentMethod;
+  travelRequestId: string | null;
+  travelDestination: string | null;
+  status: ExpenseStatus;
+  currentApproverId: string | null;
+  currentApproverName: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ExpenseAction { id: number; requestId: string; actorId: string; actorName: string; action: string; reason: string; fromStatus: string | null; toStatus: ExpenseStatus; createdAt: string; }
+export interface ExpenseLists { mine: ExpenseRequest[]; inbox: ExpenseRequest[]; history: ExpenseRequest[]; }
+
+export type TravelStatus = "draft" | "human_reviewing" | "approved" | "rejected" | "withdrawn";
+export type TravelTransportStandard = "economy" | "high_speed" | "business";
+export type TravelAccommodationStandard = "none" | "standard" | "premium";
+export interface TravelRequest {
+  id: string;
+  applicantId: string;
+  applicantName: string;
+  department: string;
+  destination: string;
+  purpose: string;
+  startAt: string;
+  endAt: string;
+  travelerIds: string[];
+  travelerNames: string[];
+  transportStandard: TravelTransportStandard;
+  accommodationStandard: TravelAccommodationStandard;
+  status: TravelStatus;
+  currentApproverId: string | null;
+  currentApproverName: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TravelAction { id: number; requestId: string; actorId: string; actorName: string; action: string; reason: string; fromStatus: string | null; toStatus: TravelStatus; createdAt: string; }
+export interface TravelLists { mine: TravelRequest[]; inbox: TravelRequest[]; history: TravelRequest[]; }
+
+export type ProcurementStatus = "draft" | "human_reviewing" | "approved" | "rejected" | "withdrawn";
+export interface ProcurementItem { name: string; quantity: number; unitPrice: number; }
+export interface ProcurementRequest {
+  id: string; applicantId: string; applicantName: string; department: string;
+  title: string; purpose: string; items: ProcurementItem[]; budget: number; estimatedAmount: number;
+  currency: "CNY" | "USD" | "EUR"; supplier: string | null; needBy: string;
+  status: ProcurementStatus; currentApproverId: string | null; currentApproverName: string | null;
+  version: number; createdAt: string; updatedAt: string;
+}
+export interface ProcurementAction { id: number; requestId: string; actorId: string; actorName: string; action: string; reason: string; fromStatus: string | null; toStatus: ProcurementStatus; createdAt: string; }
+export interface ProcurementLists { mine: ProcurementRequest[]; inbox: ProcurementRequest[]; history: ProcurementRequest[]; }
+
+export type OvertimeStatus = "draft" | "human_reviewing" | "approved" | "rejected" | "withdrawn";
+export type OvertimeCompensation = "comp_leave" | "pay";
+export interface OvertimeRequest {
+  id: string; applicantId: string; applicantName: string; department: string;
+  startAt: string; endAt: string; hours: number; reason: string; compensationType: OvertimeCompensation;
+  status: OvertimeStatus; currentApproverId: string | null; currentApproverName: string | null;
+  version: number; createdAt: string; updatedAt: string;
+}
+export interface CompTimeRequest {
+  id: string; applicantId: string; applicantName: string; department: string;
+  date: string; hours: number; reason: string; status: OvertimeStatus;
+  currentApproverId: string | null; currentApproverName: string | null; version: number; createdAt: string; updatedAt: string;
+}
+export interface OvertimeLists { mine: (OvertimeRequest | CompTimeRequest)[]; inbox: (OvertimeRequest | CompTimeRequest)[]; history: (OvertimeRequest | CompTimeRequest)[]; }
+
+export interface AnalyticsBucket {
+  key: string;
+  label: string;
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  hours: number;
+  avgProcessingHours: number | null;
+}
+
+export interface ApprovalAnalytics {
+  generatedAt: string;
+  scope: "organization";
+  summary: {
+    total: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+    draft: number;
+    withdrawn: number;
+    cancelled: number;
+    totalHours: number;
+    avgProcessingHours: number | null;
+    approvalRate: number | null;
+    overdue: number;
+    aiReviewed: number;
+    aiEscalated: number;
+  };
+  trend: { period: string; submitted: number; approved: number; rejected: number }[];
+  byDepartment: AnalyticsBucket[];
+  byLeaveType: AnalyticsBucket[];
+  risks: {
+    overdue: AnalyticsRisk[];
+    missingApprover: AnalyticsRisk[];
+    aiEscalated: AnalyticsRisk[];
+  };
+}
+
+export interface AnalyticsRisk {
+  type: string;
+  title: string;
+  requestId: string;
+  applicantName: string;
+  department: string;
+  status: LeaveStatus;
+  hours: number;
+  approverName: string | null;
 }
 
 export interface ApprovalAction {
@@ -315,6 +469,8 @@ export const api = {
       method: "POST", body: JSON.stringify({ message, conversationId, contextId, actionId }),
     }),
   chatWorkspace: (userId: string, id: string) => request<ChatWorkspace>("/api/agent/workspace/" + encodeURIComponent(id), userId),
+  createChatWorkspace: (userId: string) => request<ChatWorkspace>("/api/agent/workspace", userId, { method: "POST" }),
+  pauseAgentRun: (userId: string, id: string) => request<ChatWorkspace>("/api/agent/workspace/" + encodeURIComponent(id) + "/pause", userId, { method: "POST" }),
   chatCatalog: () => request<ChatCatalog>("/api/agent/catalog", ""),
   prepareChat: (conversationId: string, operation: string, targetId: string | null, data: Record<string, unknown>) =>
     request<ChatWorkspace>("/api/agent/prepare", "", { method: "POST", body: JSON.stringify({ conversationId, operation, targetId, data }) }),
@@ -337,7 +493,7 @@ export const api = {
       extraction: Record<string, unknown> | null;
       message: string;
       execution: {
-        mode: "deep-agent" | "deterministic-fallback";
+        mode: "deep-agent" | "agent-unavailable";
         tool: "create_leave_draft" | "list_pending_leave_approvals" | "approve_leave_request" | "reject_leave_request" | null;
         endpoint: string | null;
         toolCalls: Array<{ tool: string; endpoint: string; requestId?: string }>;
@@ -367,6 +523,31 @@ export const api = {
 
   details: (userId: string, id: string) =>
     request<LeaveDetail>(`/api/leave-requests/${id}`, userId),
+  approvalAnalytics: (userId: string) => request<ApprovalAnalytics>("/api/analytics/approval", userId),
+  expenses: (userId: string) => request<ExpenseLists>("/api/expenses", userId),
+  createExpense: (userId: string, input: Omit<ExpenseRequest, "id" | "applicantId" | "applicantName" | "department" | "status" | "currentApproverId" | "currentApproverName" | "version" | "createdAt" | "updatedAt" | "travelDestination">) => request<{ expense: ExpenseRequest }>("/api/expenses", userId, { method: "POST", body: JSON.stringify(input) }),
+  submitExpense: (userId: string, id: string, version?: number) => request<{ expense: ExpenseRequest }>(`/api/expenses/${id}/submit`, userId, { method: "POST", body: JSON.stringify({ version }) }),
+  decideExpense: (userId: string, id: string, decision: "approve" | "reject", reason: string, version?: number) => request<{ expense: ExpenseRequest }>(`/api/expenses/${id}/${decision}`, userId, { method: "POST", body: JSON.stringify({ reason, version }) }),
+  withdrawExpense: (userId: string, id: string, reason: string) => request<{ expense: ExpenseRequest }>(`/api/expenses/${id}/withdraw`, userId, { method: "POST", body: JSON.stringify({ reason }) }),
+  travelRequests: (userId: string) => request<TravelLists>("/api/travel-requests", userId),
+  createTravel: (userId: string, input: { destination: string; purpose: string; startAt: string; endAt: string; travelerIds: string[]; transportStandard: TravelTransportStandard; accommodationStandard: TravelAccommodationStandard }) => request<{ travel: TravelRequest }>("/api/travel-requests", userId, { method: "POST", body: JSON.stringify(input) }),
+  submitTravel: (userId: string, id: string, version?: number) => request<{ travel: TravelRequest }>(`/api/travel-requests/${id}/submit`, userId, { method: "POST", body: JSON.stringify({ version }) }),
+  decideTravel: (userId: string, id: string, decision: "approve" | "reject", reason: string, version?: number) => request<{ travel: TravelRequest }>(`/api/travel-requests/${id}/${decision}`, userId, { method: "POST", body: JSON.stringify({ reason, version }) }),
+  withdrawTravel: (userId: string, id: string, reason: string) => request<{ travel: TravelRequest }>(`/api/travel-requests/${id}/withdraw`, userId, { method: "POST", body: JSON.stringify({ reason }) }),
+  procurementRequests: (userId: string) => request<ProcurementLists>("/api/procurement-requests", userId),
+  createProcurement: (userId: string, input: { title: string; purpose: string; items: ProcurementItem[]; budget: number; currency: "CNY" | "USD" | "EUR"; supplier?: string | null; needBy: string }) => request<{ procurement: ProcurementRequest }>("/api/procurement-requests", userId, { method: "POST", body: JSON.stringify(input) }),
+  submitProcurement: (userId: string, id: string, version?: number) => request<{ procurement: ProcurementRequest }>(`/api/procurement-requests/${id}/submit`, userId, { method: "POST", body: JSON.stringify({ version }) }),
+  decideProcurement: (userId: string, id: string, decision: "approve" | "reject", reason: string, version?: number) => request<{ procurement: ProcurementRequest }>(`/api/procurement-requests/${id}/${decision}`, userId, { method: "POST", body: JSON.stringify({ reason, version }) }),
+  withdrawProcurement: (userId: string, id: string, reason: string) => request<{ procurement: ProcurementRequest }>(`/api/procurement-requests/${id}/withdraw`, userId, { method: "POST", body: JSON.stringify({ reason }) }),
+  overtimeRequests: (userId: string) => request<{ overtime: OvertimeLists; compTime: OvertimeLists; balance: number }>("/api/overtime", userId),
+  createOvertime: (userId: string, input: { startAt: string; endAt: string; reason: string; compensationType: OvertimeCompensation }) => request<{ overtime: OvertimeRequest }>("/api/overtime", userId, { method: "POST", body: JSON.stringify(input) }),
+  submitOvertime: (userId: string, id: string, version?: number) => request<{ overtime: OvertimeRequest }>(`/api/overtime/${id}/submit`, userId, { method: "POST", body: JSON.stringify({ version }) }),
+  decideOvertime: (userId: string, id: string, decision: "approve" | "reject", reason: string, version?: number) => request<{ overtime: OvertimeRequest }>(`/api/overtime/${id}/${decision}`, userId, { method: "POST", body: JSON.stringify({ reason, version }) }),
+  withdrawOvertime: (userId: string, id: string, reason: string) => request<{ overtime: OvertimeRequest }>(`/api/overtime/${id}/withdraw`, userId, { method: "POST", body: JSON.stringify({ reason }) }),
+  createCompTime: (userId: string, input: { date: string; hours: number; reason: string }) => request<{ compTime: CompTimeRequest }>("/api/comp-time", userId, { method: "POST", body: JSON.stringify(input) }),
+  submitCompTime: (userId: string, id: string, version?: number) => request<{ compTime: CompTimeRequest }>(`/api/comp-time/${id}/submit`, userId, { method: "POST", body: JSON.stringify({ version }) }),
+  decideCompTime: (userId: string, id: string, decision: "approve" | "reject", reason: string, version?: number) => request<{ compTime: CompTimeRequest }>(`/api/comp-time/${id}/${decision}`, userId, { method: "POST", body: JSON.stringify({ reason, version }) }),
+  withdrawCompTime: (userId: string, id: string, reason: string) => request<{ compTime: CompTimeRequest }>(`/api/comp-time/${id}/withdraw`, userId, { method: "POST", body: JSON.stringify({ reason }) }),
 };
 
 export const leaveTypeLabels: Record<LeaveType, string> = { annual: "年假", personal: "事假", sick: "病假" };

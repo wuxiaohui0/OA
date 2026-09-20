@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .agents import model_settings, result_payload, review_leave, run_assistant
+from .analytics import AnalyticsService
 from .auth import AuthService, COOKIE_NAME, LoginInput, PasswordInput, ResetPasswordInput, digest, hash_password
 from .conversations import ConversationStore
 from .db import Database
@@ -39,7 +40,16 @@ from .domain import (
     CalendarDayInput,
     BalanceAdjustmentInput,
     now_iso,
+    ExpenseInput,
+    TravelInput,
+    ProcurementInput,
+    OvertimeInput,
+    CompTimeInput,
 )
+from .expense import ExpenseService
+from .travel import TravelService
+from .procurement import ProcurementService
+from .overtime import OvertimeService
 from .leave import LeaveService
 from .organization import OrganizationService
 from .pilot import PilotService
@@ -83,6 +93,11 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
     db = Database(database_path)
     auth = AuthService(db)
     organization = OrganizationService(db)
+    analytics = AnalyticsService(db, organization)
+    expenses = ExpenseService(db, organization)
+    travel = TravelService(db, organization)
+    procurement = ProcurementService(db, organization)
+    overtime = OvertimeService(db, organization)
     leaves = LeaveService(db, reviewer or review_leave)
     pilot = PilotService(db, leaves)
     conversations = ConversationStore(db=db, ttl=30 * 24 * 60 * 60)
@@ -216,6 +231,10 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
     @app.get("/api/bootstrap")
     async def bootstrap(user: User):
         requests = db.list_leaves(user["id"])
+        expense_requests = expenses.list(user)
+        travel_requests = travel.list(user)
+        procurement_requests = procurement.list(user)
+        overtime_requests = overtime.list(user)
         settings = model_settings()
         return {
             "currentUser": user,
@@ -236,8 +255,20 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
                 "agentHandled": sum(
                     item["agentDecision"] is not None for item in requests["mine"]
                 ),
+                "expensePending": len(expense_requests["inbox"]),
+                "expenseApproved": sum(item["status"] == "approved" for item in expense_requests["mine"]),
+                "travelPending": len(travel_requests["inbox"]),
+                "travelApproved": sum(item["status"] == "approved" for item in travel_requests["mine"]),
+                "procurementPending": len(procurement_requests["inbox"]),
+                "procurementApproved": sum(item["status"] == "approved" for item in procurement_requests["mine"]),
+                "overtimePending": len(overtime_requests["overtime"]["inbox"]) + len(overtime_requests["compTime"]["inbox"]),
+                "overtimeApproved": sum(item["status"] == "approved" for item in overtime_requests["overtime"]["mine"]) + sum(item["status"] == "approved" for item in overtime_requests["compTime"]["mine"]),
             },
-            "agentMode": "deep-agent" if settings["enabled"] else "deterministic-fallback",
+            "expenses": expense_requests,
+            "travelRequests": travel_requests,
+            "procurementRequests": procurement_requests,
+            "overtimeRequests": overtime_requests,
+            "agentMode": "deep-agent" if settings["enabled"] else "agent-unavailable",
             "agentConfig": {
                 "protocol": "openai-compatible",
                 "model": settings["model"],
@@ -309,6 +340,142 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
     @app.get("/api/leave-requests/pending-approvals")
     async def pending(user: User):
         return {"items": db.pending(user["id"])}
+
+    @app.get("/api/expenses")
+    async def list_expenses(user: User):
+        return expenses.list(user)
+
+    @app.post("/api/expenses", status_code=201)
+    async def create_expense(data: ExpenseInput, user: User):
+        return {"expense": expenses.create(user, data.wire())}
+
+    @app.get("/api/expenses/{request_id}")
+    async def expense_details(request_id: str, user: User):
+        return expenses.details(request_id, user)
+
+    @app.post("/api/expenses/{request_id}/submit")
+    async def submit_expense(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"expense": expenses.submit(request_id, user, data.version)}
+
+    @app.post("/api/expenses/{request_id}/approve")
+    async def approve_expense(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"expense": expenses.decide(request_id, user, "approve", data.reason, data.version)}
+
+    @app.post("/api/expenses/{request_id}/reject")
+    async def reject_expense(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"expense": expenses.decide(request_id, user, "reject", data.reason, data.version)}
+
+    @app.post("/api/expenses/{request_id}/withdraw")
+    async def withdraw_expense(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"expense": expenses.withdraw(request_id, user, data.reason or "申请人撤回")}
+
+    @app.get("/api/travel-requests")
+    async def list_travel_requests(user: User):
+        return travel.list(user)
+
+    @app.post("/api/travel-requests", status_code=201)
+    async def create_travel_request(data: TravelInput, user: User):
+        return {"travel": travel.create(user, data.wire())}
+
+    @app.get("/api/travel-requests/{request_id}")
+    async def travel_details(request_id: str, user: User):
+        return travel.details(request_id, user)
+
+    @app.post("/api/travel-requests/{request_id}/submit")
+    async def submit_travel(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"travel": travel.submit(request_id, user, data.version)}
+
+    @app.post("/api/travel-requests/{request_id}/approve")
+    async def approve_travel(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"travel": travel.decide(request_id, user, "approve", data.reason, data.version)}
+
+    @app.post("/api/travel-requests/{request_id}/reject")
+    async def reject_travel(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"travel": travel.decide(request_id, user, "reject", data.reason, data.version)}
+
+    @app.post("/api/travel-requests/{request_id}/withdraw")
+    async def withdraw_travel(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"travel": travel.withdraw(request_id, user, data.reason or "申请人撤回")}
+
+    @app.get("/api/procurement-requests")
+    async def list_procurement_requests(user: User):
+        return procurement.list(user)
+
+    @app.post("/api/procurement-requests", status_code=201)
+    async def create_procurement(data: ProcurementInput, user: User):
+        return {"procurement": procurement.create(user, data.wire())}
+
+    @app.get("/api/procurement-requests/{request_id}")
+    async def procurement_details(request_id: str, user: User):
+        return procurement.details(request_id, user)
+
+    @app.post("/api/procurement-requests/{request_id}/submit")
+    async def submit_procurement(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"procurement": procurement.submit(request_id, user, data.version)}
+
+    @app.post("/api/procurement-requests/{request_id}/approve")
+    async def approve_procurement(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"procurement": procurement.decide(request_id, user, "approve", data.reason, data.version)}
+
+    @app.post("/api/procurement-requests/{request_id}/reject")
+    async def reject_procurement(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"procurement": procurement.decide(request_id, user, "reject", data.reason, data.version)}
+
+    @app.post("/api/procurement-requests/{request_id}/withdraw")
+    async def withdraw_procurement(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"procurement": procurement.withdraw(request_id, user, data.reason or "申请人撤回")}
+
+    @app.get("/api/overtime")
+    async def list_overtime(user: User):
+        return overtime.list(user)
+
+    @app.post("/api/overtime", status_code=201)
+    async def create_overtime(data: OvertimeInput, user: User):
+        return {"overtime": overtime.create_overtime(user, data.wire())}
+
+    @app.get("/api/overtime/{request_id}")
+    async def overtime_details(request_id: str, user: User):
+        return overtime.details_overtime(request_id, user)
+
+    @app.post("/api/overtime/{request_id}/submit")
+    async def submit_overtime(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"overtime": overtime.submit_overtime(request_id, user, data.version)}
+
+    @app.post("/api/overtime/{request_id}/approve")
+    async def approve_overtime(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"overtime": overtime.decide_overtime(request_id, user, "approve", data.reason, data.version)}
+
+    @app.post("/api/overtime/{request_id}/reject")
+    async def reject_overtime(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"overtime": overtime.decide_overtime(request_id, user, "reject", data.reason, data.version)}
+
+    @app.post("/api/overtime/{request_id}/withdraw")
+    async def withdraw_overtime(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"overtime": overtime.withdraw_overtime(request_id, user, data.reason or "申请人撤回")}
+
+    @app.post("/api/comp-time", status_code=201)
+    async def create_comp_time(data: CompTimeInput, user: User):
+        return {"compTime": overtime.create_comp_time(user, data.wire())}
+
+    @app.get("/api/comp-time/{request_id}")
+    async def comp_time_details(request_id: str, user: User):
+        return overtime.details_comp_time(request_id, user)
+
+    @app.post("/api/comp-time/{request_id}/submit")
+    async def submit_comp_time(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"compTime": overtime.submit_comp_time(request_id, user, data.version)}
+
+    @app.post("/api/comp-time/{request_id}/approve")
+    async def approve_comp_time(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"compTime": overtime.decide_comp_time(request_id, user, "approve", data.reason, data.version)}
+
+    @app.post("/api/comp-time/{request_id}/reject")
+    async def reject_comp_time(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"compTime": overtime.decide_comp_time(request_id, user, "reject", data.reason, data.version)}
+
+    @app.post("/api/comp-time/{request_id}/withdraw")
+    async def withdraw_comp_time(request_id: str, user: User, data: DecisionInput = DecisionInput()):
+        return {"compTime": overtime.withdraw_comp_time(request_id, user, data.reason or "申请人撤回")}
 
     @app.get("/api/leave-requests/approval-history")
     async def approval_history(user: User):
@@ -443,6 +610,43 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
         organization.require_access(user)
         return {"items": [db.map_leave(r) for r in db.all(db.LEAVE_SELECT + " WHERE lr.deleted_at IS NULL ORDER BY lr.updated_at DESC LIMIT 500")]}
 
+    @app.get("/api/analytics/approval")
+    async def approval_analytics(user: User):
+        return analytics.report(user)
+
+    @app.get("/api/analytics/approval/export")
+    async def export_approval_analytics(user: User):
+        rows = analytics.export_rows(user)
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=(
+                "requestId",
+                "applicantName",
+                "department",
+                "leaveType",
+                "status",
+                "durationHours",
+                "createdAt",
+                "updatedAt",
+                "processingHours",
+                "approverName",
+                "agentDecision",
+                "reason",
+            ),
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                key: ("'" + value if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")) else value)
+                for key, value in row.items()
+            })
+        return Response(
+            output.getvalue().encode("utf-8-sig"),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="approval-analytics.csv"'},
+        )
+
     @app.delete("/api/leave-requests/{request_id}", status_code=204)
     async def delete_leave(request_id: str, user: User):
         leaves.delete(request_id, user)
@@ -463,7 +667,7 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
                 result = result_payload(
                     "draft_created",
                     "当前草稿尚未确认，请先确认或取消。",
-                    "deep-agent" if model_settings()["enabled"] else "deterministic-fallback",
+                    "deep-agent" if model_settings()["enabled"] else "agent-unavailable",
                     leave=draft,
                 )
                 status_code = 200
@@ -490,5 +694,8 @@ def create_app(database_path=None, *, reviewer=None, assistant=None):
             conversations.finish(conversation)
 
     from .assistant import install_assistant
-    install_assistant(app, db, auth, leaves, pilot, organization, conversations, current_user)
+    install_assistant(
+        app, db, auth, leaves, pilot, organization, conversations, current_user,
+        travel, procurement, overtime,
+    )
     return app

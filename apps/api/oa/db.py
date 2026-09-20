@@ -154,6 +154,9 @@ class Database:
                         self.execute(
                             "UPDATE leave_requests SET submission_manager_id=current_approver_id WHERE current_approver_id IS NOT NULL"
                         )
+            expense_columns = {row["name"] for row in self.all("PRAGMA table_info(expense_requests)")}
+            if "travel_request_id" not in expense_columns:
+                self.execute("ALTER TABLE expense_requests ADD COLUMN travel_request_id TEXT REFERENCES travel_requests(id)")
             self.execute("""INSERT OR IGNORE INTO approval_steps(request_id,step_order,approver_id,status,created_at)
                 SELECT id,1,current_approver_id,'pending',updated_at FROM leave_requests
                 WHERE status='human_reviewing' AND current_approver_id IS NOT NULL""")

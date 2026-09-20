@@ -116,6 +116,55 @@ class LeaveInput(InputModel):
     handover_notes: str | None = None
 
 
+class ExpenseInput(InputModel):
+    category: Literal["travel", "meal", "office", "software", "other"]
+    amount: float = Field(gt=0, le=10_000_000, allow_inf_nan=False)
+    currency: Literal["CNY", "USD", "EUR"] = "CNY"
+    occurred_at: str = Field(min_length=1, max_length=40)
+    description: str = Field(min_length=2, max_length=2000)
+    payment_method: Literal["personal", "corporate_card", "cash", "other"]
+    travel_request_id: Identifier | None = None
+
+
+class TravelInput(InputModel):
+    destination: str = Field(min_length=2, max_length=200)
+    purpose: str = Field(min_length=2, max_length=2000)
+    start_at: str = Field(min_length=1, max_length=40)
+    end_at: str = Field(min_length=1, max_length=40)
+    traveler_ids: list[Identifier] = Field(default_factory=list, max_length=20)
+    transport_standard: Literal["economy", "high_speed", "business"] = "economy"
+    accommodation_standard: Literal["none", "standard", "premium"] = "standard"
+
+
+class ProcurementItem(InputModel):
+    name: str = Field(min_length=1, max_length=200)
+    quantity: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+    unit_price: float = Field(gt=0, le=100_000_000, allow_inf_nan=False)
+
+
+class ProcurementInput(InputModel):
+    title: str = Field(min_length=2, max_length=200)
+    purpose: str = Field(min_length=2, max_length=2000)
+    items: list[ProcurementItem] = Field(min_length=1, max_length=50)
+    budget: float = Field(gt=0, le=100_000_000, allow_inf_nan=False)
+    currency: Literal["CNY", "USD", "EUR"] = "CNY"
+    supplier: str | None = Field(default=None, max_length=200)
+    need_by: str = Field(min_length=1, max_length=40)
+
+
+class OvertimeInput(InputModel):
+    start_at: str = Field(min_length=1, max_length=40)
+    end_at: str = Field(min_length=1, max_length=40)
+    reason: str = Field(min_length=2, max_length=2000)
+    compensation_type: Literal["comp_leave", "pay"] = "comp_leave"
+
+
+class CompTimeInput(InputModel):
+    date: str = Field(min_length=1, max_length=40)
+    hours: float = Field(gt=0, le=2000, allow_inf_nan=False)
+    reason: str = Field(min_length=2, max_length=2000)
+
+
 class Permissions(InputModel):
     manage_organization: bool = Field(strict=True)
     manage_accounts: bool = Field(default=False, strict=True)

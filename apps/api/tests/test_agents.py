@@ -111,6 +111,30 @@ def test_model_settings_and_compatibility(monkeypatch):
         agents.model_settings()
 
 
+def test_agent_timeout_allows_multi_step_tool_round_trips(monkeypatch):
+    assert agents.timeout_seconds() is None
+    monkeypatch.setenv("AGENT_TIMEOUT_MS", "1000")
+    assert agents.timeout_seconds() == 5
+    monkeypatch.setenv("AGENT_TIMEOUT_MS", "999999")
+    assert agents.timeout_seconds() == 999.999
+    monkeypatch.setenv("AGENT_TIMEOUT_MS", "0")
+    assert agents.timeout_seconds() is None
+    monkeypatch.setenv("AGENT_TIMEOUT_MS", "invalid")
+    assert agents.timeout_seconds() is None
+
+
+def test_structured_response_collapses_only_consecutive_duplicate_sentences():
+    result = {
+        "structured_response": {
+            "status": "no_action",
+            "message": "今天是 2026年9月20日，星期日。今天是 2026年9月20日，星期日。可以继续办理。",
+            "missingFields": [],
+        }
+    }
+    parsed = agents.parse_response(result)
+    assert parsed["message"] == "今天是 2026年9月20日，星期日。可以继续办理。"
+
+
 @pytest.mark.parametrize("format", ["structured", "json", "fenced", "text"])
 def test_compatible_response_formats(client, app, gateway, format):
     steps, requests = gateway
@@ -220,20 +244,12 @@ def test_model_context_corrections_and_failed_turn_not_saved(client, gateway):
     api(client, "GET", f"/agent/conversations/{key}", user="u1002", status=404)
 
 
-def test_local_conversation_whole_day_and_completed_task_isolation(client, app):
-    first = ask(client, "9月17号")
-    assert first["missingFields"] == ["请假原因"]
-    key = first["conversation"]["id"]
-    value = ask(client, "头疼", key, status=201)
-    assert value["leave"]["durationHours"] == 7.5
-    assert value["leave"]["leaveType"] == "sick"
-    ask(client, "重新创建", key)
-    assert len(app.state.db.list_leaves("u1001")["mine"]) == 1
-    api(client, "DELETE", f"/leave-requests/{value['leave']['id']}", status=204)
-    assert ask(client, "好的", key)["status"] == "no_action"
-    assert "请假日期" in ask(client, "因为有事", key)["missingFields"]
-    assert "流程" in ask(client)["message"]
-    assert "人工确认" in ask(client, "批准全部申请")["message"]
+def test_unconfigured_legacy_endpoint_fails_closed(client, app):
+    value = ask(client, "9月17号请假，原因：头疼")
+    assert value["status"] == "no_action"
+    assert value["execution"]["mode"] == "agent-unavailable"
+    assert "模型尚未配置" in value["message"]
+    assert not app.state.db.list_leaves("u1001")["mine"]
 
 
 async def test_reviewer_failure_uses_local_rules(monkeypatch, app, leave_input):
@@ -245,7 +261,7 @@ async def test_reviewer_failure_uses_local_rules(monkeypatch, app, leave_input):
     monkeypatch.setattr(agents, "build_agent", fail)
     leave = app.state.leave_service.create(app.state.db.user("u1001"), leave_input)
     result = await agents.review_leave(leave, True, False)
-    assert result["mode"] == "deterministic-fallback" and result["decision"] == "escalate"
+    assert result["mode"] == "policy-engine" and result["decision"] == "escalate"
     app.state.db.close()
 
 
